@@ -10,16 +10,16 @@ import (
 	"github.com/weaveworks/common/user"
 	"github.com/weaveworks/cortex/pkg/util"
 	context "golang.org/x/net/context"
-	grpc_health_v1 "google.golang.org/grpc/health/grpc_health_v1"
+	"google.golang.org/grpc/health/grpc_health_v1"
 )
 
 // Factory defines the signature for an ingester client factory
-type Factory func(addr string, cfg Config) (IngesterClient, error)
+type Factory func(addr string) (grpc_health_v1.HealthClient, error)
 
 // IngesterPool holds a cache of ingester clients
 type IngesterPool struct {
 	sync.RWMutex
-	clients map[string]IngesterClient
+	clients map[string]grpc_health_v1.HealthClient
 
 	ingesterClientFactory Factory
 	ingesterClientConfig  Config
@@ -27,16 +27,15 @@ type IngesterPool struct {
 }
 
 // NewIngesterPool creates a new cache
-func NewIngesterPool(factory Factory, config Config, healthCheckTimeout time.Duration) *IngesterPool {
+func NewIngesterPool(factory Factory, healthCheckTimeout time.Duration) *IngesterPool {
 	return &IngesterPool{
-		clients:               map[string]IngesterClient{},
+		clients:               map[string]grpc_health_v1.HealthClient{},
 		ingesterClientFactory: factory,
-		ingesterClientConfig:  config,
 		healthCheckTimeout:    healthCheckTimeout,
 	}
 }
 
-func (pool *IngesterPool) fromCache(addr string) (IngesterClient, bool) {
+func (pool *IngesterPool) fromCache(addr string) (grpc_health_v1.HealthClient, bool) {
 	pool.RLock()
 	defer pool.RUnlock()
 	client, ok := pool.clients[addr]
@@ -45,7 +44,7 @@ func (pool *IngesterPool) fromCache(addr string) (IngesterClient, bool) {
 
 // GetClientFor gets the client for the specified address. If it does not exist it will make a new client
 // at that address
-func (pool *IngesterPool) GetClientFor(addr string) (IngesterClient, error) {
+func (pool *IngesterPool) GetClientFor(addr string) (grpc_health_v1.HealthClient, error) {
 	client, ok := pool.fromCache(addr)
 	if ok {
 		return client, nil
@@ -58,7 +57,7 @@ func (pool *IngesterPool) GetClientFor(addr string) (IngesterClient, error) {
 		return client, nil
 	}
 
-	client, err := pool.ingesterClientFactory(addr, pool.ingesterClientConfig)
+	client, err := pool.ingesterClientFactory(addr)
 	if err != nil {
 		return nil, err
 	}
@@ -116,7 +115,7 @@ func (pool *IngesterPool) CleanUnhealthy() {
 }
 
 // healthCheck will check if the client is still healthy, returning an error if it is not
-func healthCheck(client IngesterClient, timeout time.Duration) error {
+func healthCheck(client grpc_health_v1.HealthClient, timeout time.Duration) error {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	ctx = user.InjectOrgID(ctx, "0")
