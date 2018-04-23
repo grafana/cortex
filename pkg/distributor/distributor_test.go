@@ -184,10 +184,12 @@ func TestDistributorPush(t *testing.T) {
 			}
 
 			d, err := New(Config{
-				RemoteTimeout:       1 * time.Minute,
-				ClientCleanupPeriod: 1 * time.Minute,
-				IngestionRateLimit:  20,
-				IngestionBurstSize:  20,
+				PoolConfig: client.PoolConfig{
+					RemoteTimeout:       1 * time.Minute,
+					ClientCleanupPeriod: 1 * time.Minute,
+				},
+				IngestionRateLimit: 20,
+				IngestionBurstSize: 20,
 
 				ingesterClientFactory: func(addr string, _ client.Config) (client.IngesterClient, error) {
 					return ingesters[addr], nil
@@ -322,10 +324,12 @@ func TestDistributorQuery(t *testing.T) {
 			}
 
 			d, err := New(Config{
-				RemoteTimeout:       1 * time.Minute,
-				ClientCleanupPeriod: 1 * time.Minute,
-				IngestionRateLimit:  10000,
-				IngestionBurstSize:  10000,
+				PoolConfig: client.PoolConfig{
+					RemoteTimeout:       1 * time.Minute,
+					ClientCleanupPeriod: 1 * time.Minute,
+				},
+				IngestionRateLimit: 10000,
+				IngestionBurstSize: 10000,
 
 				ingesterClientFactory: func(addr string, _ client.Config) (client.IngesterClient, error) {
 					return ingesters[addr], nil

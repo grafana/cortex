@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/weaveworks/cortex/pkg/ring"
 	context "golang.org/x/net/context"
 	grpc "google.golang.org/grpc"
 	"google.golang.org/grpc/health/grpc_health_v1"
@@ -25,6 +26,14 @@ func (i mockIngester) Check(ctx context.Context, in *grpc_health_v1.HealthCheckR
 
 func (i mockIngester) Close() error {
 	return nil
+}
+
+type mockReadRing struct {
+	ring.ReadRing
+}
+
+func (mockReadRing) GetAll() (ring.ReplicationSet, error) {
+	return ring.ReplicationSet{}, nil
 }
 
 func TestHealthCheck(t *testing.T) {
@@ -57,7 +66,11 @@ func TestIngesterCache(t *testing.T) {
 		buildCount++
 		return mockIngester{happy: true, status: grpc_health_v1.HealthCheckResponse_SERVING}, nil
 	}
-	pool := NewIngesterPool(factory, 50*time.Millisecond)
+	pool := NewPool(PoolConfig{
+		RemoteTimeout:       50 * time.Millisecond,
+		ClientCleanupPeriod: 10 * time.Second,
+	}, mockReadRing{}, factory)
+	defer pool.Stop()
 
 	pool.GetClientFor("1")
 	if buildCount != 1 {
@@ -108,10 +121,10 @@ func TestCleanUnhealthy(t *testing.T) {
 	for _, addr := range badAddrs {
 		clients[addr] = mockIngester{happy: false, status: grpc_health_v1.HealthCheckResponse_NOT_SERVING}
 	}
-	pool := &IngesterPool{
+	pool := &Pool{
 		clients: clients,
 	}
-	pool.CleanUnhealthy()
+	pool.cleanUnhealthy()
 	for _, addr := range badAddrs {
 		if _, ok := pool.clients[addr]; ok {
 			t.Errorf("Found bad ingester after clean: %s\n", addr)
