@@ -78,6 +78,8 @@ type Config struct {
 	IngestionBurstSize   int
 	HealthCheckIngesters bool
 
+	DontShardMetricNamesFrom util.TimeValue
+
 	// for testing
 	ingesterClientFactory func(addr string, cfg ingester_client.Config) (client.IngesterClient, error)
 }
@@ -92,6 +94,7 @@ func (cfg *Config) RegisterFlags(f *flag.FlagSet) {
 	flag.Float64Var(&cfg.IngestionRateLimit, "distributor.ingestion-rate-limit", 25000, "Per-user ingestion rate limit in samples per second.")
 	flag.IntVar(&cfg.IngestionBurstSize, "distributor.ingestion-burst-size", 50000, "Per-user allowed ingestion burst size (in number of samples).")
 	flag.BoolVar(&cfg.HealthCheckIngesters, "distributor.health-check-ingesters", false, "Run a health check on each ingester client during periodic cleanup.")
+	flag.Var(&cfg.DontShardMetricNamesFrom, "distributor.dont-shard-metric-names-from", "The date & time after which we stop sharding by metric name.")
 }
 
 // New constructs a new Distributor
@@ -203,19 +206,35 @@ func (d *Distributor) removeStaleIngesterClients() {
 	}
 }
 
-func tokenForLabels(userID string, labels []client.LabelPair) (uint32, error) {
+func (d *Distributor) tokenForLabels(timestampMS int64, userID string, labels []client.LabelPair) (uint32, error) {
+	timestamp := model.Time(timestampMS)
+	cutoff := model.TimeFromUnix(d.cfg.DontShardMetricNamesFrom.Unix())
+	if !d.cfg.DontShardMetricNamesFrom.IsSet() || timestamp.Before(cutoff) {
+		return shardByMetricName(userID, labels)
+	}
+
+	return shardByAllLabels(userID, labels), nil
+}
+
+func shardByMetricName(userID string, labels []client.LabelPair) (uint32, error) {
 	for _, label := range labels {
 		if label.Name.Equal(labelNameBytes) {
-			return tokenFor(userID, label.Value), nil
+			h := fnv.New32()
+			h.Write([]byte(userID))
+			h.Write(label.Value)
+			return h.Sum32(), nil
 		}
 	}
 	return 0, fmt.Errorf("No metric name label")
 }
 
-func tokenFor(userID string, name []byte) uint32 {
+func shardByAllLabels(userID string, labels []client.LabelPair) uint32 {
 	h := fnv.New32()
 	h.Write([]byte(userID))
-	h.Write(name)
+	for _, label := range labels {
+		h.Write(label.Name)
+		h.Write(label.Value)
+	}
 	return h.Sum32()
 }
 
@@ -248,11 +267,11 @@ func (d *Distributor) Push(ctx context.Context, req *client.WriteRequest) (*clie
 	samples := make([]sampleTracker, 0, len(req.Timeseries))
 	keys := make([]uint32, 0, len(req.Timeseries))
 	for _, ts := range req.Timeseries {
-		key, err := tokenForLabels(userID, ts.Labels)
-		if err != nil {
-			return nil, err
-		}
 		for _, s := range ts.Samples {
+			key, err := d.tokenForLabels(s.TimestampMs, userID, ts.Labels)
+			if err != nil {
+				return nil, err
+			}
 			keys = append(keys, key)
 			samples = append(samples, sampleTracker{
 				labels: ts.Labels,
@@ -385,25 +404,13 @@ func (d *Distributor) sendSamplesErr(ctx context.Context, ingester *ring.Ingeste
 func (d *Distributor) Query(ctx context.Context, from, to model.Time, matchers ...*labels.Matcher) (model.Matrix, error) {
 	var matrix model.Matrix
 	err := instrument.TimeRequestHistogram(ctx, "Distributor.Query", d.queryDuration, func(ctx context.Context) error {
-		userID, err := user.ExtractOrgID(ctx)
-		if err != nil {
-			return err
-		}
-
-		metricNameMatcher, _, ok := util.ExtractMetricNameMatcherFromMatchers(matchers)
-
 		req, err := ingester_client.ToQueryRequest(from, to, matchers)
 		if err != nil {
 			return err
 		}
 
-		// Get ingesters by metricName if one exists, otherwise get all ingesters
-		var replicationSet ring.ReplicationSet
-		if ok && metricNameMatcher.Type == labels.MatchEqual {
-			replicationSet, err = d.ring.Get(tokenFor(userID, []byte(metricNameMatcher.Value)), ring.Read)
-		} else {
-			replicationSet, err = d.ring.GetAll()
-		}
+		// From now on, just query all ingesters
+		replicationSet, err := d.ring.GetAll()
 		if err != nil {
 			return promql.ErrStorage(err)
 		}

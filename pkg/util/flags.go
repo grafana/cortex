@@ -58,6 +58,41 @@ func (v *DayValue) IsSet() bool {
 	return v.set
 }
 
+// TimeValue is a model.Time that can be used as a flag.
+type TimeValue struct {
+	model.Time
+	set bool
+}
+
+// NewTimeValue makes a new DayValue
+func NewTimeValue(t model.Time) TimeValue {
+	return TimeValue{
+		Time: t,
+		set:  true,
+	}
+}
+
+// String implements flag.Value
+func (v TimeValue) String() string {
+	return v.Time.Time().Format(time.RFC3339)
+}
+
+// Set implements flag.Value
+func (v *TimeValue) Set(s string) error {
+	t, err := time.Parse(time.RFC3339, s)
+	if err != nil {
+		return err
+	}
+	v.Time = model.TimeFromUnix(t.Unix())
+	v.set = true
+	return nil
+}
+
+// IsSet returns true is the DayValue has been set.
+func (v *TimeValue) IsSet() bool {
+	return v.set
+}
+
 // URLValue is a url.URL that can be used as a flag.
 type URLValue struct {
 	*url.URL
