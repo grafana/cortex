@@ -296,9 +296,15 @@ func (i *Ingester) Push(ctx old_ctx.Context, req *client.WriteRequest) (*client.
 	var lastPartialErr error
 	samples := client.FromWriteRequest(req)
 
+	seriesCreated := 0
+
 	var err error
+	var created bool
 	for j := range samples {
-		if err = i.append(ctx, &samples[j]); err == nil {
+		if created, err = i.append(ctx, &samples[j]); err == nil {
+			if created {
+				seriesCreated++
+			}
 			continue
 		}
 
@@ -315,18 +321,22 @@ func (i *Ingester) Push(ctx old_ctx.Context, req *client.WriteRequest) (*client.
 		}
 	}
 
+	if span := opentracing.SpanFromContext(ctx); span != nil {
+		span.LogKV("samples", len(samples), "new_series", seriesCreated)
+	}
+
 	return &client.WriteResponse{}, lastPartialErr
 }
 
-func (i *Ingester) append(ctx context.Context, sample *model.Sample) error {
+func (i *Ingester) append(ctx context.Context, sample *model.Sample) (created bool, err error) {
 	if i.cfg.RejectOldSamples && sample.Timestamp < model.Now().Add(-i.cfg.RejectOldSamplesMaxAge) {
 		discardedSamples.WithLabelValues(greaterThanMaxSampleAge).Inc()
-		return httpgrpc.Errorf(http.StatusBadRequest, "sample with timestamp %v is older than the maximum accepted age", sample.Timestamp)
+		return created, httpgrpc.Errorf(http.StatusBadRequest, "sample with timestamp %v is older than the maximum accepted age", sample.Timestamp)
 	}
 
-	if err := util.ValidateSample(sample); err != nil {
+	if err = util.ValidateSample(sample); err != nil {
 		level.Error(util.WithContext(ctx, util.Logger)).Log("msg", "error validating sample", "err", err)
-		return nil
+		return created, nil
 	}
 
 	for ln, lv := range sample.Metric {
@@ -338,22 +348,24 @@ func (i *Ingester) append(ctx context.Context, sample *model.Sample) error {
 	i.stopLock.RLock()
 	defer i.stopLock.RUnlock()
 	if i.stopped {
-		return fmt.Errorf("ingester stopping")
+		return created, fmt.Errorf("ingester stopping")
 	}
 
 	i.userStatesMtx.RLock()
 	defer i.userStatesMtx.RUnlock()
 	created, state, fp, series, err := i.userStates.getOrCreateSeries(ctx, sample.Metric)
 	if err != nil {
-		return err
+		return created, err
 	}
 	defer func() {
 		state.fpLocker.Unlock(fp)
 	}()
 
 	if created {
-		userID, _ := user.ExtractOrgID(ctx)
-		i.memSeriesTotal.WithLabelValues(userID).Inc()
+		userID, err := user.ExtractOrgID(ctx)
+		if err != nil {
+			i.memSeriesTotal.WithLabelValues(userID).Inc()
+		}
 	}
 
 	prevNumChunks := len(series.chunkDescs)
@@ -361,14 +373,14 @@ func (i *Ingester) append(ctx context.Context, sample *model.Sample) error {
 		Value:     sample.Value,
 		Timestamp: sample.Timestamp,
 	}); err != nil {
-		return err
+		return created, err
 	}
 
 	i.memoryChunks.Add(float64(len(series.chunkDescs) - prevNumChunks))
 	i.ingestedSamples.Inc()
 	state.ingestedSamples.inc()
 
-	return err
+	return created, err
 }
 
 // Query implements service.IngesterServer
@@ -525,6 +537,7 @@ func (i *Ingester) Describe(ch chan<- *prometheus.Desc) {
 	ch <- memoryUsersDesc
 	ch <- flushQueueLengthDesc
 	ch <- i.ingestedSamples.Desc()
+	ch <- i.ingestedSamplesFail.Desc()
 	ch <- i.chunkUtilization.Desc()
 	ch <- i.chunkLength.Desc()
 	ch <- i.chunkAge.Desc()
@@ -582,5 +595,6 @@ func (i *Ingester) Collect(ch chan<- prometheus.Metric) {
 	ch <- i.queries
 	ch <- i.queriedSamples
 	ch <- i.memoryChunks
+
 	i.memSeriesTotal.Collect(ch)
 }
