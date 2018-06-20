@@ -90,7 +90,7 @@ func (i *Ingester) TransferChunks(stream client.Ingester_TransferChunksServer) e
 			return err
 		}
 
-		state, fp, series, err := userStates.getOrCreateSeries(userCtx, metric)
+		_, state, fp, series, err := userStates.getOrCreateSeries(userCtx, metric)
 		if err != nil {
 			return err
 		}

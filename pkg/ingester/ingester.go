@@ -20,6 +20,7 @@ import (
 	"github.com/weaveworks/cortex/pkg/prom1/storage/local/chunk"
 
 	"github.com/weaveworks/common/httpgrpc"
+	"github.com/weaveworks/common/user"
 	cortex_chunk "github.com/weaveworks/cortex/pkg/chunk"
 	"github.com/weaveworks/cortex/pkg/ingester/client"
 	"github.com/weaveworks/cortex/pkg/ring"
@@ -133,13 +134,15 @@ type Ingester struct {
 	// Hook for injecting behaviour from tests.
 	preFlushUserSeries func()
 
-	ingestedSamples  prometheus.Counter
-	chunkUtilization prometheus.Histogram
-	chunkLength      prometheus.Histogram
-	chunkAge         prometheus.Histogram
-	queries          prometheus.Counter
-	queriedSamples   prometheus.Counter
-	memoryChunks     prometheus.Gauge
+	ingestedSamples     prometheus.Counter
+	ingestedSamplesFail prometheus.Counter
+	memSeriesTotal      *prometheus.CounterVec
+	chunkUtilization    prometheus.Histogram
+	chunkLength         prometheus.Histogram
+	chunkAge            prometheus.Histogram
+	queries             prometheus.Counter
+	queriedSamples      prometheus.Counter
+	memoryChunks        prometheus.Gauge
 }
 
 // ChunkStore is the interface we need to store chunks
@@ -191,6 +194,14 @@ func New(cfg Config, chunkStore ChunkStore) (*Ingester, error) {
 			Name: "cortex_ingester_ingested_samples_total",
 			Help: "The total number of samples ingested.",
 		}),
+		ingestedSamplesFail: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "cortex_ingester_ingested_samples_failures_total",
+			Help: "The total number of samples that errored on ingestion.",
+		}),
+		memSeriesTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "cortex_ingester_memory_series_created_total",
+			Help: "The total number of series that were created per user.",
+		}, []string{"user"}),
 		chunkUtilization: prometheus.NewHistogram(prometheus.HistogramOpts{
 			Name:    "cortex_ingester_chunk_utilization",
 			Help:    "Distribution of stored chunk utilization (when stored).",
@@ -285,16 +296,21 @@ func (i *Ingester) Push(ctx old_ctx.Context, req *client.WriteRequest) (*client.
 	var lastPartialErr error
 	samples := client.FromWriteRequest(req)
 
-samples:
+	var err error
 	for j := range samples {
-		if err := i.append(ctx, &samples[j]); err != nil {
-			if httpResp, ok := httpgrpc.HTTPResponseFromError(err); ok {
-				switch httpResp.Code {
-				case http.StatusBadRequest, http.StatusTooManyRequests:
-					lastPartialErr = err
-					continue samples
-				}
+		if err = i.append(ctx, &samples[j]); err == nil {
+			continue
+		}
+
+		i.ingestedSamplesFail.Inc()
+
+		if httpResp, ok := httpgrpc.HTTPResponseFromError(err); ok {
+			switch httpResp.Code {
+			case http.StatusBadRequest, http.StatusTooManyRequests:
+				lastPartialErr = err
+				continue
 			}
+
 			return nil, err
 		}
 	}
@@ -327,13 +343,18 @@ func (i *Ingester) append(ctx context.Context, sample *model.Sample) error {
 
 	i.userStatesMtx.RLock()
 	defer i.userStatesMtx.RUnlock()
-	state, fp, series, err := i.userStates.getOrCreateSeries(ctx, sample.Metric)
+	created, state, fp, series, err := i.userStates.getOrCreateSeries(ctx, sample.Metric)
 	if err != nil {
 		return err
 	}
 	defer func() {
 		state.fpLocker.Unlock(fp)
 	}()
+
+	if created {
+		userID, _ := user.ExtractOrgID(ctx)
+		i.memSeriesTotal.WithLabelValues(userID).Inc()
+	}
 
 	prevNumChunks := len(series.chunkDescs)
 	if err := series.add(model.SamplePair{
@@ -510,6 +531,8 @@ func (i *Ingester) Describe(ch chan<- *prometheus.Desc) {
 	ch <- i.queries.Desc()
 	ch <- i.queriedSamples.Desc()
 	ch <- i.memoryChunks.Desc()
+
+	i.memSeriesTotal.Describe(ch)
 }
 
 // Collect implements prometheus.Collector.
@@ -552,10 +575,12 @@ func (i *Ingester) Collect(ch chan<- prometheus.Metric) {
 	flushQueueSpan.Finish()
 
 	ch <- i.ingestedSamples
+	ch <- i.ingestedSamplesFail
 	ch <- i.chunkUtilization
 	ch <- i.chunkLength
 	ch <- i.chunkAge
 	ch <- i.queries
 	ch <- i.queriedSamples
 	ch <- i.memoryChunks
+	i.memSeriesTotal.Collect(ch)
 }
