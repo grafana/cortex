@@ -20,9 +20,6 @@ workflows:
         - test
         - lint
         - integration
-        filters:
-          branches:
-            only: master
 
 jobs:
   lint:
