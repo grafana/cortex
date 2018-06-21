@@ -173,19 +173,19 @@ func TestIngesterAppendOutOfOrderAndDuplicate(t *testing.T) {
 		model.MetricNameLabel: "testmetric",
 	}
 	ctx := user.InjectOrgID(context.Background(), userID)
-	err = ing.append(ctx, &model.Sample{Metric: m, Timestamp: 1, Value: 0})
+	_, err = ing.append(ctx, &model.Sample{Metric: m, Timestamp: 1, Value: 0})
 	require.NoError(t, err)
 
 	// Two times exactly the same sample (noop).
-	err = ing.append(ctx, &model.Sample{Metric: m, Timestamp: 1, Value: 0})
+	_, err = ing.append(ctx, &model.Sample{Metric: m, Timestamp: 1, Value: 0})
 	require.NoError(t, err)
 
 	// Earlier sample than previous one.
-	err = ing.append(ctx, &model.Sample{Metric: m, Timestamp: 0, Value: 0})
+	_, err = ing.append(ctx, &model.Sample{Metric: m, Timestamp: 0, Value: 0})
 	require.Contains(t, err.Error(), "sample timestamp out of order")
 
 	// Same timestamp as previous sample, but different value.
-	err = ing.append(ctx, &model.Sample{Metric: m, Timestamp: 1, Value: 1})
+	_, err = ing.append(ctx, &model.Sample{Metric: m, Timestamp: 1, Value: 1})
 	require.Contains(t, err.Error(), "sample with repeated timestamp but different value")
 }
 

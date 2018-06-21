@@ -128,10 +128,11 @@ func (us *userStates) getOrCreate(ctx context.Context) (*userState, error) {
 	return us.unlockedGetOrCreate(userID), nil
 }
 
-func (us *userStates) getOrCreateSeries(ctx context.Context, metric model.Metric) (*userState, model.Fingerprint, *memorySeries, error) {
+func (us *userStates) getOrCreateSeries(ctx context.Context, metric model.Metric) (bool, *userState, model.Fingerprint, *memorySeries, error) {
+	created := false
 	userID, err := user.ExtractOrgID(ctx)
 	if err != nil {
-		return nil, 0, nil, fmt.Errorf("no user id")
+		return created, nil, 0, nil, fmt.Errorf("no user id")
 	}
 
 	var (
@@ -144,22 +145,22 @@ func (us *userStates) getOrCreateSeries(ctx context.Context, metric model.Metric
 	us.mtx.RLock()
 	state, ok = us.states[userID]
 	if ok {
-		fp, series, err = state.unlockedGet(metric, us.cfg)
+		created, fp, series, err = state.unlockedGet(metric, us.cfg)
 		if err != nil {
 			us.mtx.RUnlock()
-			return nil, fp, nil, err
+			return created, nil, fp, nil, err
 		}
 	}
 	us.mtx.RUnlock()
 	if ok {
-		return state, fp, series, nil
+		return created, state, fp, series, nil
 	}
 
 	us.mtx.Lock()
 	defer us.mtx.Unlock()
 	state = us.unlockedGetOrCreate(userID)
-	fp, series, err = state.unlockedGet(metric, us.cfg)
-	return state, fp, series, err
+	created, fp, series, err = state.unlockedGet(metric, us.cfg)
+	return created, state, fp, series, err
 }
 
 func (us *userStates) unlockedGetOrCreate(userID string) *userState {
@@ -179,7 +180,7 @@ func (us *userStates) unlockedGetOrCreate(userID string) *userState {
 	return state
 }
 
-func (u *userState) unlockedGet(metric model.Metric, cfg *UserStatesConfig) (model.Fingerprint, *memorySeries, error) {
+func (u *userState) unlockedGet(metric model.Metric, cfg *UserStatesConfig) (bool, model.Fingerprint, *memorySeries, error) {
 	rawFP := metric.FastFingerprint()
 	u.fpLocker.Lock(rawFP)
 	fp := u.mapper.mapFP(rawFP, metric)
@@ -190,7 +191,7 @@ func (u *userState) unlockedGet(metric model.Metric, cfg *UserStatesConfig) (mod
 
 	series, ok := u.fpToSeries.get(fp)
 	if ok {
-		return fp, series, nil
+		return false, fp, series, nil
 	}
 
 	// There's theoretically a relatively harmless race here if multiple
@@ -200,25 +201,25 @@ func (u *userState) unlockedGet(metric model.Metric, cfg *UserStatesConfig) (mod
 	// serially), and the overshoot in allowed series would be minimal.
 	if u.fpToSeries.length() >= cfg.MaxSeriesPerUser {
 		u.fpLocker.Unlock(fp)
-		return fp, nil, httpgrpc.Errorf(http.StatusTooManyRequests, "per-user series limit (%d) exceeded", cfg.MaxSeriesPerUser)
+		return false, fp, nil, httpgrpc.Errorf(http.StatusTooManyRequests, "per-user series limit (%d) exceeded", cfg.MaxSeriesPerUser)
 	}
 
 	metricName, err := util.ExtractMetricNameFromMetric(metric)
 	if err != nil {
 		u.fpLocker.Unlock(fp)
-		return fp, nil, err
+		return false, fp, nil, err
 	}
 
 	if !u.canAddSeriesFor(metricName, cfg) {
 		u.fpLocker.Unlock(fp)
-		return fp, nil, httpgrpc.Errorf(http.StatusTooManyRequests, "per-metric series limit (%d) exceeded for %s: %s", cfg.MaxSeriesPerMetric, metricName, metric)
+		return false, fp, nil, httpgrpc.Errorf(http.StatusTooManyRequests, "per-metric series limit (%d) exceeded for %s: %s", cfg.MaxSeriesPerMetric, metricName, metric)
 	}
 
 	util.Event().Log("msg", "new series", "userID", u.userID, "fp", fp, "series", metric)
 	series = newMemorySeries(metric)
 	u.fpToSeries.put(fp, series)
 	u.index.add(metric, fp)
-	return fp, series, nil
+	return true, fp, series, nil
 }
 
 func (u *userState) canAddSeriesFor(metric model.LabelValue, cfg *UserStatesConfig) bool {
