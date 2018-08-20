@@ -17,7 +17,7 @@ import (
 type Distributor interface {
 	Query(ctx context.Context, from, to model.Time, matchers ...*labels.Matcher) (model.Matrix, error)
 	QueryStream(ctx context.Context, from, to model.Time, matchers ...*labels.Matcher) ([]client.TimeSeriesChunk, error)
-	LabelValuesForLabelName(context.Context, model.LabelName) (model.LabelValues, error)
+	LabelValuesForLabelName(context.Context, model.LabelName) ([]string, error)
 	MetricsForLabelMatchers(ctx context.Context, from, through model.Time, matchers ...*labels.Matcher) ([]metric.Metric, error)
 }
 
@@ -48,16 +48,7 @@ func (q *distributorQuerier) Select(_ *storage.SelectParams, matchers ...*labels
 }
 
 func (q *distributorQuerier) LabelValues(name string) ([]string, error) {
-	values, err := q.distributor.LabelValuesForLabelName(q.ctx, model.LabelName(name))
-	if err != nil {
-		return nil, err
-	}
-
-	result := make([]string, len(values), len(values))
-	for i := 0; i < len(values); i++ {
-		result[i] = string(values[i])
-	}
-	return result, nil
+	return q.distributor.LabelValuesForLabelName(q.ctx, model.LabelName(name))
 }
 
 func (q *distributorQuerier) Close() error {
