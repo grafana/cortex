@@ -68,7 +68,7 @@ var (
 		Name: "cortex_ingester_queried_chunks",
 		Help: "The total number of chunks returned from queries.",
 		// A small number of chunks per series - 10*(4^8) = 655k.
-		Buckets: prometheus.DefBuckets,
+		Buckets: prometheus.ExponentialBuckets(10, 4, 8),
 	})
 )
 
