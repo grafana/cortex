@@ -1,20 +1,79 @@
 package chunk
 
 import (
+	"context"
 	"sync"
 	"time"
+
+	ot "github.com/opentracing/opentracing-go"
+	otlog "github.com/opentracing/opentracing-go/log"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 )
 
-// fifoCache is a simple string -> interface{} cache which uses a fifo slide to
+var (
+	cacheEntriesAdded = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "querier",
+		Subsystem: "cache",
+		Name:      "added_total",
+		Help:      "The total number of Put calls on the cache",
+	}, []string{"cache"})
+
+	cacheEntriesAddedNew = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "querier",
+		Subsystem: "cache",
+		Name:      "added_new_total",
+		Help:      "The total number of new entries added to the cache",
+	}, []string{"cache"})
+
+	cacheEntriesEvicted = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "querier",
+		Subsystem: "cache",
+		Name:      "evicted_total",
+		Help:      "The total number of evicted entries",
+	}, []string{"cache"})
+
+	cacheTotalGets = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "querier",
+		Subsystem: "cache",
+		Name:      "gets_total",
+		Help:      "The total number of Get calls",
+	}, []string{"cache"})
+
+	cacheTotalMisses = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "querier",
+		Subsystem: "cache",
+		Name:      "misses_total",
+		Help:      "The total number of Get calls that had no valid entry",
+	}, []string{"cache"})
+
+	cacheStaleGets = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "querier",
+		Subsystem: "cache",
+		Name:      "stale_gets_total",
+		Help:      "The total number of Get calls that had an entry which expired",
+	}, []string{"cache"})
+)
+
+// FifoCache is a simple string -> interface{} cache which uses a fifo slide to
 // manage evictions.  O(1) inserts and updates, O(1) gets.
-type fifoCache struct {
-	lock    sync.RWMutex
-	size    int
-	entries []cacheEntry
-	index   map[string]int
+type FifoCache struct {
+	lock     sync.RWMutex
+	size     int
+	validity time.Duration
+	entries  []cacheEntry
+	index    map[string]int
 
 	// indexes into entries to identify the most recent and least recent entry.
 	first, last int
+
+	name            string
+	entriesAdded    prometheus.Counter
+	entriesAddedNew prometheus.Counter
+	entriesEvicted  prometheus.Counter
+	totalGets       prometheus.Counter
+	totalMisses     prometheus.Counter
+	staleGets       prometheus.Counter
 }
 
 type cacheEntry struct {
@@ -24,15 +83,30 @@ type cacheEntry struct {
 	prev, next int
 }
 
-func newFifoCache(size int) *fifoCache {
-	return &fifoCache{
-		size:    size,
-		entries: make([]cacheEntry, 0, size),
-		index:   make(map[string]int, size),
+// NewFifoCache returns a new initialised FifoCache of size.
+func NewFifoCache(name string, size int, validity time.Duration) *FifoCache {
+	return &FifoCache{
+		size:     size,
+		validity: validity,
+		entries:  make([]cacheEntry, 0, size),
+		index:    make(map[string]int, size),
+
+		name:            name,
+		entriesAdded:    cacheEntriesAdded.WithLabelValues(name),
+		entriesAddedNew: cacheEntriesAddedNew.WithLabelValues(name),
+		entriesEvicted:  cacheEntriesEvicted.WithLabelValues(name),
+		totalGets:       cacheTotalGets.WithLabelValues(name),
+		totalMisses:     cacheTotalMisses.WithLabelValues(name),
+		staleGets:       cacheStaleGets.WithLabelValues(name),
 	}
 }
 
-func (c *fifoCache) put(key string, value interface{}) {
+// Put stores the value against the key.
+func (c *FifoCache) Put(ctx context.Context, key string, value interface{}) {
+	span, ctx := ot.StartSpanFromContext(ctx, c.name+"-cache-put")
+	defer span.Finish()
+
+	c.entriesAdded.Inc()
 	if c.size == 0 {
 		return
 	}
@@ -62,9 +136,11 @@ func (c *fifoCache) put(key string, value interface{}) {
 		c.entries[index] = entry
 		return
 	}
+	c.entriesAddedNew.Inc()
 
 	// Otherwise, see if we need to evict an entry.
 	if len(c.entries) >= c.size {
+		c.entriesEvicted.Inc()
 		index = c.last
 		entry := c.entries[index]
 
@@ -95,19 +171,34 @@ func (c *fifoCache) put(key string, value interface{}) {
 	c.index[key] = index
 }
 
-func (c *fifoCache) get(key string) (value interface{}, updated time.Time, ok bool) {
+// Get returns the stored value against the key and when the key was last updated.
+func (c *FifoCache) Get(ctx context.Context, key string) (interface{}, bool) {
+	span, ctx := ot.StartSpanFromContext(ctx, c.name+"-cache-get")
+	defer span.Finish()
+
+	c.totalGets.Inc()
 	if c.size == 0 {
-		return
+		return nil, false
 	}
 
 	c.lock.RLock()
 	defer c.lock.RUnlock()
 
-	var index int
-	index, ok = c.index[key]
+	index, ok := c.index[key]
 	if ok {
-		value = c.entries[index].value
-		updated = c.entries[index].updated
+		updated := c.entries[index].updated
+		if time.Now().Sub(updated) < c.validity {
+			span.LogFields(otlog.Bool("hit", true))
+			return c.entries[index].value, true
+		}
+
+		c.totalMisses.Inc()
+		c.staleGets.Inc()
+		span.LogFields(otlog.Bool("hit", false), otlog.Bool("stale", true))
+		return nil, false
 	}
-	return
+
+	span.LogFields(otlog.Bool("hit", false), otlog.Bool("stale", false))
+	c.totalMisses.Inc()
+	return nil, false
 }

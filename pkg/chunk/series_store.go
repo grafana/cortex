@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"time"
 
 	"github.com/go-kit/kit/log/level"
 	"github.com/prometheus/client_golang/prometheus"
@@ -52,7 +51,7 @@ var (
 // seriesStore implements Store
 type seriesStore struct {
 	store
-	cardinalityCache *fifoCache
+	cardinalityCache *FifoCache
 }
 
 func newSeriesStore(cfg StoreConfig, schema Schema, storage StorageClient) (Store, error) {
@@ -68,7 +67,7 @@ func newSeriesStore(cfg StoreConfig, schema Schema, storage StorageClient) (Stor
 			schema:  schema,
 			Fetcher: fetcher,
 		},
-		cardinalityCache: newFifoCache(cfg.CardinalityCacheSize),
+		cardinalityCache: NewFifoCache("cardinality", cfg.CardinalityCacheSize, cfg.CardinalityCacheValidity),
 	}, nil
 }
 
@@ -224,13 +223,12 @@ func (c *seriesStore) lookupSeriesByMetricNameMatcher(ctx context.Context, from,
 	level.Debug(log).Log("queries", len(queries))
 
 	for _, query := range queries {
-		value, updated, ok := c.cardinalityCache.get(query.HashValue)
+		value, ok := c.cardinalityCache.Get(ctx, query.HashValue)
 		if !ok {
 			continue
 		}
-		entryAge := time.Now().Sub(updated)
 		cardinality := value.(int)
-		if entryAge < c.cfg.CardinalityCacheValidity && cardinality > c.cfg.CardinalityLimit {
+		if cardinality > c.cfg.CardinalityLimit {
 			return nil, errCardinalityExceeded
 		}
 	}
@@ -243,7 +241,7 @@ func (c *seriesStore) lookupSeriesByMetricNameMatcher(ctx context.Context, from,
 
 	// TODO This is not correct, will overcount for queries > 24hrs
 	for _, query := range queries {
-		c.cardinalityCache.put(query.HashValue, len(entries))
+		c.cardinalityCache.Put(ctx, query.HashValue, len(entries))
 	}
 	if len(entries) > c.cfg.CardinalityLimit {
 		return nil, errCardinalityExceeded
