@@ -917,8 +917,8 @@
   revision = "be0d55e547b147ea1817f037cab9458bf7fc7850"
 
 [[projects]]
-  branch = "master"
-  digest = "1:a3d33cb49d37fae16881f4b7ba60c55c9d99237695f912b158b6b773e1a333f8"
+  branch = "expose-http-server"
+  digest = "1:d783b7cbf0c66ca14df69122d7873ab311c86e9459dc0f8c3166f5592ac38985"
   name = "github.com/weaveworks/common"
   packages = [
     "aws",
@@ -938,7 +938,8 @@
     "user",
   ]
   pruneopts = "UT"
-  revision = "80ff0769bb38e575cd85a64a4575a2ca1ef5ada5"
+  revision = "8d8cdd759abd6091d0502513812bff6b92a73072"
+  source = "github.com/tomwilkie/weaveworks-common"
 
 [[projects]]
   digest = "1:efac30de93ca1ff38050f46dc34f1338ebc8778de488f919f79ad9e6188719d3"
@@ -1337,7 +1338,6 @@
     "github.com/gocql/gocql",
     "github.com/gogo/protobuf/gogoproto",
     "github.com/gogo/protobuf/proto",
-    "github.com/gogo/protobuf/sortkeys",
     "github.com/golang/protobuf/proto",
     "github.com/golang/snappy",
     "github.com/gorilla/mux",
