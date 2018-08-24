@@ -830,6 +830,14 @@
   version = "v1.1.0"
 
 [[projects]]
+  branch = "master"
+  digest = "1:c59d82fe02e030fcbd31e71534e2c72028e50ef14eaa3fbe26b077fdf82daa6e"
+  name = "github.com/segmentio/fasthash"
+  packages = ["fnv1a"]
+  pruneopts = "UT"
+  revision = "a72b379d632eab4b49e4f4b2c765cfebf0a74796"
+
+[[projects]]
   digest = "1:8e79da55d2a6a92374cc7ca5ce1a7739fe0a13ca04b6f8c806a50f1873138eff"
   name = "github.com/sercand/kuberesolver"
   packages = ["."]
@@ -909,8 +917,8 @@
   revision = "be0d55e547b147ea1817f037cab9458bf7fc7850"
 
 [[projects]]
-  branch = "master"
-  digest = "1:5fb4b51835377c63ba87d8c6120d6c7c87ee7ea31a0883bf028f4caefca411f7"
+  branch = "expose-http-server"
+  digest = "1:d783b7cbf0c66ca14df69122d7873ab311c86e9459dc0f8c3166f5592ac38985"
   name = "github.com/weaveworks/common"
   packages = [
     "aws",
@@ -930,7 +938,8 @@
     "user",
   ]
   pruneopts = "UT"
-  revision = "54b7e30527f846e1515fb5a85d0ff5674f05a267"
+  revision = "8d8cdd759abd6091d0502513812bff6b92a73072"
+  source = "github.com/tomwilkie/weaveworks-common"
 
 [[projects]]
   digest = "1:efac30de93ca1ff38050f46dc34f1338ebc8778de488f919f79ad9e6188719d3"
@@ -1329,7 +1338,6 @@
     "github.com/gocql/gocql",
     "github.com/gogo/protobuf/gogoproto",
     "github.com/gogo/protobuf/proto",
-    "github.com/gogo/protobuf/sortkeys",
     "github.com/golang/protobuf/proto",
     "github.com/golang/snappy",
     "github.com/gorilla/mux",
@@ -1381,12 +1389,14 @@
     "github.com/prometheus/prometheus/web/api/v1",
     "github.com/prometheus/tsdb",
     "github.com/prometheus/tsdb/fileutil",
+    "github.com/segmentio/fasthash/fnv1a",
     "github.com/stretchr/testify/assert",
     "github.com/stretchr/testify/require",
     "github.com/weaveworks/billing-client",
     "github.com/weaveworks/common/aws",
     "github.com/weaveworks/common/errors",
     "github.com/weaveworks/common/httpgrpc",
+    "github.com/weaveworks/common/httpgrpc/server",
     "github.com/weaveworks/common/instrument",
     "github.com/weaveworks/common/logging",
     "github.com/weaveworks/common/mflag",
@@ -1408,6 +1418,7 @@
     "google.golang.org/grpc/encoding/gzip",
     "google.golang.org/grpc/health/grpc_health_v1",
     "google.golang.org/grpc/metadata",
+    "google.golang.org/grpc/naming",
     "google.golang.org/grpc/status",
     "gopkg.in/yaml.v2",
   ]

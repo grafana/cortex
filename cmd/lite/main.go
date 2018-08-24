@@ -122,7 +122,7 @@ func main() {
 	tableManager.Start()
 	defer tableManager.Stop()
 
-	queryable, engine := querier.Make(querierConfig, dist, chunkStore)
+	queryable, engine := querier.New(querierConfig, dist, chunkStore)
 
 	if configStoreConfig.ConfigsAPIURL.String() != "" || configStoreConfig.DBConfig.URI != "" {
 		rulesAPI, err := ruler.NewRulesAPI(configStoreConfig)
