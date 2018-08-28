@@ -35,6 +35,11 @@
   name = "github.com/prometheus/tsdb"
   branch = "master"
 
+[[constraint]]
+  name = "github.com/weaveworks/common"
+  source = "github.com/gouthamve/common-1.git"
+  branch = "pre-middleware"
+
 [[override]]
   name = "k8s.io/client-go"
   revision = "7d04d0e2a0a1a4d4a1cd6baa432a2301492e4e65"
