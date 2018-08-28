@@ -917,8 +917,8 @@
   revision = "be0d55e547b147ea1817f037cab9458bf7fc7850"
 
 [[projects]]
-  branch = "master"
-  digest = "1:51733e0105994029b3c8386da549def50d733d13938d93fbf870f03ff8c8acad"
+  branch = "pre-middleware"
+  digest = "1:4bb56a821e57d30bdce938e343003bce76ffb885e347e5ec02b285387f55663b"
   name = "github.com/weaveworks/common"
   packages = [
     "aws",
@@ -938,7 +938,8 @@
     "user",
   ]
   pruneopts = "UT"
-  revision = "1a7a6b3820595d7682b7284682b733733005c57e"
+  revision = "d906d37fd286c6fe3a8ca68e274c4c74aa15810f"
+  source = "github.com/gouthamve/common-1.git"
 
 [[projects]]
   digest = "1:efac30de93ca1ff38050f46dc34f1338ebc8778de488f919f79ad9e6188719d3"
