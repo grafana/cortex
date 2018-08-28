@@ -10,6 +10,8 @@ import (
 
 	"github.com/go-kit/kit/log"
 	"github.com/go-kit/kit/log/level"
+	"github.com/opentracing-contrib/go-stdlib/nethttp"
+	opentracing "github.com/opentracing/opentracing-go"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/weaveworks/common/httpgrpc"
@@ -104,6 +106,9 @@ func (f *Frontend) serveHTTP(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
+
+	r, ht := nethttp.TraceRequest(opentracing.GlobalTracer(), r)
+	defer ht.Finish()
 
 	req, err := server.HTTPRequest(r)
 	if err != nil {
