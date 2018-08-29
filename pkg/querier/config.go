@@ -13,9 +13,10 @@ import (
 
 // Config contains the configuration require to create a querier
 type Config struct {
-	MaxConcurrent int
-	Timeout       time.Duration
-	Iterators     bool
+	MaxConcurrent  int
+	Timeout        time.Duration
+	Iterators      bool
+	BatchIterators bool
 }
 
 // RegisterFlags adds the flags required to config this to the given FlagSet.
@@ -26,11 +27,12 @@ func (cfg *Config) RegisterFlags(f *flag.FlagSet) {
 		f.DurationVar(&promql.LookbackDelta, "promql.lookback-delta", promql.LookbackDelta, "Time since the last sample after which a time series is considered stale and ignored by expression evaluations.")
 	}
 	f.BoolVar(&cfg.Iterators, "querier.iterators", false, "Use iterators to execute query, as opposed to fully materialising the series in memory.")
+	f.BoolVar(&cfg.BatchIterators, "querier.batch-iterators", false, "Use batch iterators to execute query, as opposed to fully materialising the series in memory.  Takes precedent over the -querier.iterators flag.")
 }
 
 // Make builds a queryable and promql engine.
 func Make(cfg Config, distributor Distributor, chunkStore ChunkStore) (storage.Queryable, *promql.Engine) {
-	queryable := NewQueryable(distributor, chunkStore, cfg.Iterators)
+	queryable := NewQueryable(distributor, chunkStore, cfg.Iterators, cfg.BatchIterators)
 	engine := promql.NewEngine(util.Logger, prometheus.DefaultRegisterer, cfg.MaxConcurrent, cfg.Timeout)
 	return queryable, engine
 }

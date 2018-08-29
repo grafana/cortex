@@ -7,6 +7,7 @@ import (
 	"github.com/prometheus/prometheus/pkg/labels"
 	"github.com/prometheus/prometheus/storage"
 	"github.com/weaveworks/cortex/pkg/chunk"
+	"github.com/weaveworks/cortex/pkg/querier/batch"
 )
 
 // ChunkStore is the read-interface to the Chunk Store.  Made an interface here
@@ -16,10 +17,12 @@ type ChunkStore interface {
 }
 
 // NewQueryable creates a new Queryable for cortex.
-func NewQueryable(distributor Distributor, chunkStore ChunkStore, iterators bool) storage.Queryable {
+func NewQueryable(distributor Distributor, chunkStore ChunkStore, iterators, batchIterators bool) storage.Queryable {
 	dq := newDistributorQueryable(distributor)
 	cq := newChunkQueryable(chunkStore)
-	if iterators {
+	if batchIterators {
+		cq = newIterChunkQueryable(batch.NewChunkMergeIterator)(chunkStore)
+	} else if iterators {
 		cq = newIterChunkQueryable(newChunkMergeIterator)(chunkStore)
 	}
 
