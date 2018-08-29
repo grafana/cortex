@@ -79,7 +79,7 @@ func main() {
 	defer dist.Stop()
 
 	engine := promql.NewEngine(util.Logger, prometheus.DefaultRegisterer, rulerConfig.NumWorkers, rulerConfig.GroupTimeout)
-	queryable := querier.NewQueryable(dist, chunkStore, querierConfig.Iterators)
+	queryable := querier.NewQueryable(dist, chunkStore, querierConfig.Iterators, querierConfig.BatchIterators)
 
 	rlr, err := ruler.NewRuler(rulerConfig, engine, queryable, dist)
 	if err != nil {
