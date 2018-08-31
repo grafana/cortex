@@ -10,14 +10,45 @@ import (
 	"sync"
 
 	"github.com/pkg/errors"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/tsdb/fileutil"
 	"golang.org/x/sys/unix"
 )
 
+var (
+	bucketsTotal = prometheus.NewGauge(prometheus.GaugeOpts{
+		Namespace: "cortex",
+		Name:      "diskcache_buckets_total",
+		Help:      "Total count of buckets in the cache.",
+	})
+	bucketsInitialized = prometheus.NewCounter(prometheus.CounterOpts{
+		Namespace: "cortex",
+		Name:      "diskcache_added_new_total",
+		Help:      "total number of entries added to the cache",
+	})
+	collisionsTotal = prometheus.NewCounter(prometheus.CounterOpts{
+		Namespace: "cortex",
+		Name:      "diskcache_evicted_total",
+		Help:      "total number entries evicted from the cache",
+	})
+)
+
+func init() {
+	prometheus.MustRegister(bucketsTotal)
+	prometheus.MustRegister(bucketsInitialized)
+	prometheus.MustRegister(collisionsTotal)
+}
+
 // TODO: in the future we could cuckoo hash or linear probe.
 
-// Buckets contain key (~50), chunks (1024) and their metadata (~100)
-const bucketSize = 2048
+// Buckets contain chunks (1024) and their metadata (~100)
+const (
+	// Buckets contain chunks (1024) and their metadata (~100)
+	bucketSize = 2048
+
+	// Total number of mutexes shared by the disk cache index
+	numMutexes = 1000
+)
 
 // DiskcacheConfig for the Disk cache.
 type DiskcacheConfig struct {
@@ -33,10 +64,11 @@ func (cfg *DiskcacheConfig) RegisterFlags(f *flag.FlagSet) {
 
 // Diskcache is an on-disk chunk cache.
 type Diskcache struct {
-	mtx     sync.RWMutex
-	f       *os.File
-	buckets uint32
-	buf     []byte
+	f            *os.File
+	buckets      uint32
+	buf          []byte
+	index        []string
+	indexMutexes []sync.RWMutex
 }
 
 // NewDiskcache creates a new on-disk cache.
@@ -62,11 +94,17 @@ func NewDiskcache(cfg DiskcacheConfig) (*Diskcache, error) {
 	}
 
 	buckets := len(buf) / bucketSize
+	bucketsTotal.Set(float64(buckets)) // Report the number of buckets in the diskcache as a metric
+
+	index := make([]string, buckets)
+	indexMutexes := make([]sync.RWMutex, numMutexes)
 
 	return &Diskcache{
-		f:       f,
-		buf:     buf,
-		buckets: uint32(buckets),
+		f:            f,
+		buckets:      uint32(buckets),
+		buf:          buf,
+		index:        index,
+		indexMutexes: indexMutexes,
 	}, nil
 }
 
@@ -93,10 +131,16 @@ func (d *Diskcache) FetchChunkData(ctx context.Context, keys []string) (found []
 }
 
 func (d *Diskcache) fetch(key string) ([]byte, bool) {
-	d.mtx.RLock()
-	defer d.mtx.RUnlock()
-
 	bucket := hash(key) % d.buckets
+
+	mutex := bucket % numMutexes // Get the index of the mutex associated with this bucket
+	d.indexMutexes[mutex].RLock()
+	defer d.indexMutexes[mutex].RUnlock()
+
+	if d.index[bucket] != key {
+		return nil, false
+	}
+
 	buf := d.buf[bucket*bucketSize : (bucket+1)*bucketSize]
 
 	existingKey, n, ok := get(buf, 0)
@@ -116,10 +160,22 @@ func (d *Diskcache) fetch(key string) ([]byte, bool) {
 
 // StoreChunk puts a chunk into the cache.
 func (d *Diskcache) StoreChunk(ctx context.Context, key string, value []byte) error {
-	d.mtx.Lock()
-	defer d.mtx.Unlock()
-
 	bucket := hash(key) % d.buckets
+
+	mutex := bucket % numMutexes // Get the index of the mutex associated with this bucket
+	d.indexMutexes[mutex].Lock()
+	defer d.indexMutexes[mutex].Unlock()
+
+	if d.index[bucket] == key { // If chunk is already cached return nil
+		return nil
+	}
+
+	if d.index[bucket] == "" {
+		bucketsInitialized.Inc()
+	} else {
+		collisionsTotal.Inc()
+	}
+
 	buf := d.buf[bucket*bucketSize : (bucket+1)*bucketSize]
 
 	n, err := put([]byte(key), buf, 0)
@@ -129,12 +185,16 @@ func (d *Diskcache) StoreChunk(ctx context.Context, key string, value []byte) er
 
 	_, err = put(value, buf, n)
 	if err != nil {
+		d.index[bucket] = ""
 		return err
 	}
 
+	d.index[bucket] = key
 	return nil
 }
 
+// put places a value in the buffer in the following format
+// |u int64 <length of key> | key | uint64 <length of value> | value |
 func put(value []byte, buf []byte, n int) (int, error) {
 	if len(value)+n+4 > len(buf) {
 		return 0, errors.Wrap(fmt.Errorf("value too big: %d > %d", len(value), len(buf)), "put")
