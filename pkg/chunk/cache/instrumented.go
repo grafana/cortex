@@ -21,13 +21,13 @@ var (
 	fetchedKeys = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: "cortex",
 		Name:      "cache_fetched_keys",
-		Help:      "Total count of chunks requested from cache.",
+		Help:      "Total count of keys requested from cache.",
 	}, []string{"name"})
 
 	hits = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: "cortex",
 		Name:      "cache_hits",
-		Help:      "Total count of chunks found in cache.",
+		Help:      "Total count of keys found in cache.",
 	}, []string{"name"})
 )
 
@@ -37,7 +37,8 @@ func init() {
 	prometheus.MustRegister(hits)
 }
 
-func instrument(name string, cache Cache) Cache {
+// Instrument returns an instrumented cache.
+func Instrument(name string, cache Cache) Cache {
 	return &instrumentedCache{
 		name:        name,
 		fetchedKeys: fetchedKeys.WithLabelValues(name),
@@ -52,13 +53,16 @@ type instrumentedCache struct {
 	Cache
 }
 
-func (i *instrumentedCache) StoreChunk(ctx context.Context, key string, buf []byte) error {
+func (i *instrumentedCache) Store(ctx context.Context, key string, buf []byte) error {
 	return instr.TimeRequestHistogram(ctx, i.name+".store", requestDuration, func(ctx context.Context) error {
-		return i.Cache.StoreChunk(ctx, key, buf)
+		sp := ot.SpanFromContext(ctx)
+		sp.LogFields(otlog.String("key", key))
+
+		return i.Cache.Store(ctx, key, buf)
 	})
 }
 
-func (i *instrumentedCache) FetchChunkData(ctx context.Context, keys []string) ([]string, [][]byte, []string, error) {
+func (i *instrumentedCache) Fetch(ctx context.Context, keys []string) ([]string, [][]byte, []string, error) {
 	var (
 		found   []string
 		bufs    [][]byte
@@ -66,13 +70,13 @@ func (i *instrumentedCache) FetchChunkData(ctx context.Context, keys []string) (
 	)
 	err := instr.TimeRequestHistogram(ctx, i.name+".fetch", requestDuration, func(ctx context.Context) error {
 		sp := ot.SpanFromContext(ctx)
-		sp.LogFields(otlog.Int("chunks requested", len(keys)))
+		sp.LogFields(otlog.Int("keys requested", len(keys)))
 
 		var err error
-		found, bufs, missing, err = i.Cache.FetchChunkData(ctx, keys)
+		found, bufs, missing, err = i.Cache.Fetch(ctx, keys)
 
 		if err == nil {
-			sp.LogFields(otlog.Int("chunks found", len(found)), otlog.Int("chunks missing", len(keys)-len(found)))
+			sp.LogFields(otlog.Int("keys found", len(found)), otlog.Int("keys missing", len(keys)-len(found)))
 		} else {
 			sp.LogFields(otlog.Error(err))
 		}
