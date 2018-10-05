@@ -10,6 +10,8 @@ import (
 	"github.com/cortexproject/cortex/pkg/chunk/cache"
 	"github.com/cortexproject/cortex/pkg/util"
 	"github.com/go-kit/kit/log/level"
+	opentracing "github.com/opentracing/opentracing-go"
+	otlog "github.com/opentracing/opentracing-go/log"
 	"github.com/prometheus/common/model"
 	"github.com/weaveworks/common/user"
 )
@@ -40,7 +42,7 @@ func newResultsCacheMiddleware(cfg resultsCacheConfig) (queryRangeMiddleware, er
 		return &resultsCache{
 			cfg:   cfg,
 			next:  next,
-			cache: cache.NewSnappy(c),
+			cache: cache.Instrument("frontend-cache", cache.NewSnappy(c)),
 		}
 	}), nil
 }
@@ -59,10 +61,14 @@ type extent struct {
 }
 
 func (s resultsCache) Do(ctx context.Context, r *queryRangeRequest) (*apiResponse, error) {
+	span, ctx := opentracing.StartSpanFromContext(ctx, "caching_middleware")
+	defer span.Finish()
+
 	userID, err := user.ExtractOrgID(ctx)
 	if err != nil {
 		return nil, err
 	}
+	span.LogFields(otlog.String("userID", userID))
 
 	var (
 		day      = r.start / millisecondPerDay
@@ -87,6 +93,9 @@ func (s resultsCache) Do(ctx context.Context, r *queryRangeRequest) (*apiRespons
 }
 
 func (s resultsCache) handleMiss(ctx context.Context, r *queryRangeRequest) (*apiResponse, []extent, error) {
+	span, ctx := opentracing.StartSpanFromContext(ctx, "handle_miss")
+	defer span.Finish()
+
 	response, err := s.next.Do(ctx, r)
 	if err != nil {
 		return nil, nil, err
@@ -103,6 +112,9 @@ func (s resultsCache) handleMiss(ctx context.Context, r *queryRangeRequest) (*ap
 }
 
 func (s resultsCache) handleHit(ctx context.Context, r *queryRangeRequest, extents []extent) (*apiResponse, []extent, error) {
+	span, ctx := opentracing.StartSpanFromContext(ctx, "handle_hit")
+	defer span.Finish()
+
 	var (
 		reqResps []requestResponse
 		err      error
@@ -110,7 +122,7 @@ func (s resultsCache) handleHit(ctx context.Context, r *queryRangeRequest, exten
 
 	requests, responses := partition(r, extents)
 	if len(requests) == 0 {
-		response, err := mergeAPIResponses(responses)
+		response, err := mergeAPIResponses(ctx, responses)
 		// No downstream requests so no need to write back to the cache.
 		return response, nil, err
 	}
@@ -142,7 +154,7 @@ func (s resultsCache) handleHit(ctx context.Context, r *queryRangeRequest, exten
 		}
 
 		accumulator.End = extents[i].End
-		accumulator.Response, err = mergeAPIResponses([]*apiResponse{accumulator.Response, extents[i].Response})
+		accumulator.Response, err = mergeAPIResponses(ctx, []*apiResponse{accumulator.Response, extents[i].Response})
 		if err != nil {
 			return nil, nil, err
 		}
@@ -150,7 +162,7 @@ func (s resultsCache) handleHit(ctx context.Context, r *queryRangeRequest, exten
 	}
 	mergedExtents = append(mergedExtents, accumulator)
 
-	response, err := mergeAPIResponses(responses)
+	response, err := mergeAPIResponses(ctx, responses)
 	return response, mergedExtents, err
 }
 
@@ -202,16 +214,22 @@ func (s resultsCache) filterRecentExtents(req *queryRangeRequest, extents []exte
 }
 
 func (s resultsCache) get(ctx context.Context, key string) ([]extent, bool) {
+	span, ctx := opentracing.StartSpanFromContext(ctx, "results_cache_get")
+	defer span.Finish()
+
 	found, buf, _ := s.cache.Fetch(ctx, []string{cache.HashKey(key)})
 	if len(found) != 1 {
 		return nil, false
 	}
 
 	var resp cachedResponse
+	span, _ = opentracing.StartSpanFromContext(ctx, "results_cache_unmarshal_json")
+	span.LogFields(otlog.Int("buf", len(buf[0])))
 	if err := json.Unmarshal(buf[0], &resp); err != nil {
 		level.Error(util.Logger).Log("msg", "error unmarshaling cached value", "err", err)
 		return nil, false
 	}
+	span.Finish()
 
 	if resp.Key != key {
 		return nil, false

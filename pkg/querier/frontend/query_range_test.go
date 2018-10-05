@@ -242,7 +242,7 @@ func TestMergeAPIResponses(t *testing.T) {
 		},
 	} {
 		t.Run(strconv.Itoa(i), func(t *testing.T) {
-			output, err := mergeAPIResponses(tc.input)
+			output, err := mergeAPIResponses(context.Background(), tc.input)
 			require.NoError(t, err)
 			require.Equal(t, tc.expected, output)
 		})

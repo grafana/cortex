@@ -3,6 +3,8 @@ package frontend
 import (
 	"context"
 	"time"
+
+	opentracing "github.com/opentracing/opentracing-go"
 )
 
 const millisecondPerDay = int64(24 * time.Hour / time.Millisecond)
@@ -24,6 +26,9 @@ type response struct {
 }
 
 func (s splitByDay) Do(ctx context.Context, r *queryRangeRequest) (*apiResponse, error) {
+	span, ctx := opentracing.StartSpanFromContext(ctx, "split_by_day_middleware")
+	defer span.Finish()
+
 	// First we're going to build new requests, one for each day, taking care
 	// to line up the boundaries with step.
 	reqs := splitQuery(r)
@@ -38,7 +43,7 @@ func (s splitByDay) Do(ctx context.Context, r *queryRangeRequest) (*apiResponse,
 		resps = append(resps, reqResp.resp)
 	}
 
-	return mergeAPIResponses(resps)
+	return mergeAPIResponses(ctx, resps)
 }
 
 func splitQuery(r *queryRangeRequest) []*queryRangeRequest {

@@ -14,6 +14,7 @@ import (
 	"github.com/cortexproject/cortex/pkg/util"
 	"github.com/go-kit/kit/log/level"
 	"github.com/json-iterator/go"
+	opentracing "github.com/opentracing/opentracing-go"
 	"github.com/prometheus/common/model"
 	"github.com/prometheus/prometheus/util/stats"
 	"github.com/weaveworks/common/httpgrpc"
@@ -262,7 +263,10 @@ func extractSampleStream(start, end int64, stream *model.SampleStream) *model.Sa
 	return result
 }
 
-func mergeAPIResponses(responses []*apiResponse) (*apiResponse, error) {
+func mergeAPIResponses(ctx context.Context, responses []*apiResponse) (*apiResponse, error) {
+	span, ctx := opentracing.StartSpanFromContext(ctx, "mergeAPIResponses")
+	defer span.Finish()
+
 	// Merge the responses.
 	sort.Sort(byFirstTime(responses))
 

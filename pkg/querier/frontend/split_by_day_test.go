@@ -148,7 +148,7 @@ func TestSplitByDay(t *testing.T) {
 		},
 	}
 
-	mergedResponse, err := mergeAPIResponses([]*apiResponse{
+	mergedResponse, err := mergeAPIResponses(context.Background(), []*apiResponse{
 		parsedResponse,
 		parsedResponse,
 	})
