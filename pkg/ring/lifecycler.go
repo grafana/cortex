@@ -167,7 +167,7 @@ func (i *Lifecycler) IsReady(ctx context.Context) bool {
 
 	// Ingester always take at least minReadyDuration to become ready to work
 	// around race conditions with ingesters exiting and updating the ring
-	if time.Now().Sub(i.startTime) < minReadyDuration {
+	if time.Now().Sub(i.startTime) < minReadyDuration && i.cfg.RingConfig.Store != "inmemory" {
 		return false
 	}
 
