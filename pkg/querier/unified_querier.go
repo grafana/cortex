@@ -32,7 +32,9 @@ func newUnifiedChunkQueryable(ds, cs chunkstore.ChunkStore, distributor Distribu
 		}
 
 		// Include ingester only if maxt is within ingesterMaxQueryLookback w.r.t. current time.
-		if ingesterMaxQueryLookback == 0 || maxt >= time.Now().Add(-ingesterMaxQueryLookback).UnixNano()/1e6 {
+		// Also don't include the ingester if the query is totally in the future.
+		if (ingesterMaxQueryLookback == 0 || maxt >= time.Now().Add(-ingesterMaxQueryLookback).UnixNano()/1e6) &&
+			mint < time.Now().Add(5*time.Minute).UnixNano()/1e6 {
 			ucq.stores = append(ucq.stores, ds)
 		}
 
