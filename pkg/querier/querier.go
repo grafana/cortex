@@ -5,7 +5,9 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-kit/kit/log/level"
@@ -14,7 +16,9 @@ import (
 	"github.com/prometheus/prometheus/pkg/labels"
 	"github.com/prometheus/prometheus/promql"
 	"github.com/prometheus/prometheus/storage"
+	"github.com/thanos-io/thanos/pkg/strutil"
 	"github.com/weaveworks/common/user"
+	"golang.org/x/sync/errgroup"
 
 	"github.com/cortexproject/cortex/pkg/chunk"
 	"github.com/cortexproject/cortex/pkg/chunk/purger"
@@ -373,11 +377,92 @@ func (q querier) Select(_ bool, sp *storage.SelectHints, matchers ...*labels.Mat
 
 // LabelsValue implements storage.Querier.
 func (q querier) LabelValues(name string) ([]string, storage.Warnings, error) {
-	return q.metadataQuerier.LabelValues(name)
+	if !q.queryStoreForLabels {
+		return q.metadataQuerier.LabelValues(name)
+	}
+
+	if len(q.queriers) == 1 {
+		return q.queriers[0].LabelValues(name)
+	}
+
+	var (
+		g, _     = errgroup.WithContext(q.ctx)
+		sets     = [][]string{}
+		warnings = storage.Warnings(nil)
+
+		resMtx sync.Mutex
+	)
+
+	for _, querier := range q.queriers {
+		// Need to reassign as the original variable will change and can't be relied on in a goroutine.
+		querier := querier
+		g.Go(func() error {
+			myValues, myWarnings, err := querier.LabelValues(name)
+			if err != nil {
+				return err
+			}
+
+			// We need values to be sorted we can merge them.
+			sort.Strings(myValues)
+
+			resMtx.Lock()
+			sets = append(sets, myValues)
+			warnings = append(warnings, myWarnings...)
+			resMtx.Unlock()
+
+			return nil
+		})
+	}
+
+	err := g.Wait()
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return strutil.MergeSlices(sets...), warnings, nil
 }
 
 func (q querier) LabelNames() ([]string, storage.Warnings, error) {
-	return q.metadataQuerier.LabelNames()
+	if !q.queryStoreForLabels {
+		return q.metadataQuerier.LabelNames()
+	}
+
+	if len(q.queriers) == 1 {
+		return q.queriers[0].LabelNames()
+	}
+
+	var (
+		g, _     = errgroup.WithContext(q.ctx)
+		sets     = [][]string{}
+		warnings = storage.Warnings(nil)
+
+		resMtx sync.Mutex
+	)
+
+	for _, querier := range q.queriers {
+		// Need to reassign as the original variable will change and can't be relied on in a goroutine.
+		querier := querier
+		g.Go(func() error {
+			myNames, myWarnings, err := querier.LabelNames()
+			if err != nil {
+				return err
+			}
+
+			resMtx.Lock()
+			sets = append(sets, myNames)
+			warnings = append(warnings, myWarnings...)
+			resMtx.Unlock()
+
+			return nil
+		})
+	}
+
+	err := g.Wait()
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return strutil.MergeSlices(sets...), warnings, nil
 }
 
 func (querier) Close() error {
