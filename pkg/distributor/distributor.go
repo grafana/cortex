@@ -79,6 +79,8 @@ type Distributor struct {
 
 	activeUsers *util.ActiveUsersCleanupService
 
+	debugSeries []labels.Labels
+
 	// Metrics
 	queryDuration                    *instrument.HistogramCollector
 	receivedSamples                  *prometheus.CounterVec
@@ -123,6 +125,9 @@ type Config struct {
 
 	// This config is dynamically injected because defined in the querier config.
 	ShuffleShardingLookbackPeriod time.Duration `yaml:"-"`
+
+	// Strings of metric_name{label="value", ...} to look for when receiving remote write reqeusts.
+	DebugSeries []string `yaml:"debug_series,omitempty"`
 }
 
 // RegisterFlags adds the flags required to config this to the given FlagSet
@@ -276,6 +281,10 @@ func New(cfg Config, clientConfig ingester_client.Config, limits *validation.Ove
 	d.replicationFactor.Set(float64(ingestersRing.ReplicationFactor()))
 	d.activeUsers = util.NewActiveUsersCleanupWithDefaultValues(d.cleanupInactiveUser)
 
+	for _, s := range cfg.DebugSeries {
+		d.debugSeries = append(d.debugSeries, fromString(s))
+	}
+
 	subservices = append(subservices, d.ingesterPool, d.activeUsers)
 	d.subservices, err = services.NewManager(subservices...)
 	if err != nil {
@@ -286,6 +295,34 @@ func New(cfg Config, clientConfig ingester_client.Config, limits *validation.Ove
 
 	d.Service = services.NewBasicService(d.starting, d.running, d.stopping)
 	return d, nil
+}
+
+// parses metric_name{label="value", ...} string into a labels.Labels
+func fromString(s string) labels.Labels {
+	var b labels.Builder
+	var seriesName string
+	str := strings.Split(s, "{")
+	if len(str[0]) > 0 {
+		seriesName = str[0]
+	}
+
+	ls := strings.Split(str[1], ",")
+
+	var name, value string
+	for _, s := range ls {
+		split := strings.Split(s, "=")
+		if len(split) != 2 {
+			panic("wrong number of strings after splitting label=\"value\"")
+		}
+		name = strings.TrimSpace(split[0])
+		value = strings.Trim(split[1], "\",}")
+		b.Set(name, value)
+	}
+	l := b.Labels()
+	if seriesName != "" {
+		l = append([]labels.Label{labels.Label{Name: "__name__", Value: seriesName}}, l...)
+	}
+	return l
 }
 
 func (d *Distributor) starting(ctx context.Context) error {
@@ -561,6 +598,8 @@ func (d *Distributor) Push(ctx context.Context, req *cortexpb.WriteRequest) (*co
 			continue
 		}
 
+		d.matchesDebugSeries(validatedSeries.Labels, ts.Samples)
+
 		seriesKeys = append(seriesKeys, key)
 		validatedTimeseries = append(validatedTimeseries, validatedSeries)
 		validatedSamples += len(ts.Samples)
@@ -647,6 +686,17 @@ func (d *Distributor) Push(ctx context.Context, req *cortexpb.WriteRequest) (*co
 		return nil, err
 	}
 	return &cortexpb.WriteResponse{}, firstPartialErr
+}
+
+func (d *Distributor) matchesDebugSeries(l []cortexpb.LabelAdapter, samples []cortexpb.Sample) {
+	asLabels := cortexpb.FromLabelAdaptersToLabels(l)
+	for _, sample := range samples {
+		for _, s := range d.debugSeries {
+			if labels.Equal(s, asLabels) {
+				level.Info(d.log).Log("msg", "Found sample for series", "series", s, "value", sample.Value, "timestamp", sample.TimestampMs)
+			}
+		}
+	}
 }
 
 func sortLabelsIfNeeded(labels []cortexpb.LabelAdapter) {
