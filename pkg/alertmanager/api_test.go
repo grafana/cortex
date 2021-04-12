@@ -28,7 +28,7 @@ func TestAMConfigValidationAPI(t *testing.T) {
 		err      error
 	}{
 		{
-			name: "It is not a valid payload without receivers",
+			name: "Should return error if the alertmanager config contains no receivers",
 			cfg: `
 alertmanager_config: |
   route:
@@ -41,7 +41,7 @@ alertmanager_config: |
 			err: fmt.Errorf("error validating Alertmanager config: undefined receiver \"default-receiver\" used in route"),
 		},
 		{
-			name: "It is valid",
+			name: "Should pass if the alertmanager config is valid",
 			cfg: `
 alertmanager_config: |
   route:
@@ -55,43 +55,7 @@ alertmanager_config: |
 `,
 		},
 		{
-			name: "It is not valid with paths in the template",
-			cfg: `
-alertmanager_config: |
-  route:
-    receiver: 'default-receiver'
-    group_wait: 30s
-    group_interval: 5m
-    repeat_interval: 4h
-    group_by: [cluster, alertname]
-  receivers:
-    - name: default-receiver
-template_files:
-  "good.tpl": "good-templ"
-  "not/very/good.tpl": "bad-template"
-`,
-			err: fmt.Errorf("error validating Alertmanager config: unable to create template file 'not/very/good.tpl'"),
-		},
-		{
-			name: "It is not valid with .",
-			cfg: `
-alertmanager_config: |
-  route:
-    receiver: 'default-receiver'
-    group_wait: 30s
-    group_interval: 5m
-    repeat_interval: 4h
-    group_by: [cluster, alertname]
-  receivers:
-    - name: default-receiver
-template_files:
-  "good.tpl": "good-templ"
-  ".": "bad-template"
-`,
-			err: fmt.Errorf("error validating Alertmanager config: unable to create template file '.'"),
-		},
-		{
-			name: "It is not valid if the config is empty due to wrong indendatation",
+			name: "Should return error if the config is empty due to wrong indentation",
 			cfg: `
 alertmanager_config: |
 route:
@@ -109,7 +73,7 @@ template_files:
 			err: fmt.Errorf("error validating Alertmanager config: configuration provided is empty, if you'd like to remove your configuration please use the delete configuration endpoint"),
 		},
 		{
-			name: "It is not valid if the config is empty due to wrong key",
+			name: "Should return error if the alertmanager config is empty due to wrong key",
 			cfg: `
 XWRONGalertmanager_config: |
   route:
@@ -122,9 +86,144 @@ XWRONGalertmanager_config: |
     - name: default-receiver
 template_files:
   "good.tpl": "good-templ"
-  "not/very/good.tpl": "bad-template"
 `,
 			err: fmt.Errorf("error validating Alertmanager config: configuration provided is empty, if you'd like to remove your configuration please use the delete configuration endpoint"),
+		},
+		{
+			name: "Should return error if the external template file name contains an absolute path",
+			cfg: `
+alertmanager_config: |
+  route:
+    receiver: 'default-receiver'
+    group_wait: 30s
+    group_interval: 5m
+    repeat_interval: 4h
+    group_by: [cluster, alertname]
+  receivers:
+    - name: default-receiver
+template_files:
+  "/absolute/filepath": "a simple template"
+`,
+			err: fmt.Errorf(`error validating Alertmanager config: invalid template name "/absolute/filepath": the template name cannot contain any path`),
+		},
+		{
+			name: "Should return error if the external template file name contains a relative path",
+			cfg: `
+alertmanager_config: |
+  route:
+    receiver: 'default-receiver'
+    group_wait: 30s
+    group_interval: 5m
+    repeat_interval: 4h
+    group_by: [cluster, alertname]
+  receivers:
+    - name: default-receiver
+template_files:
+  "../filepath": "a simple template"
+`,
+			err: fmt.Errorf(`error validating Alertmanager config: invalid template name "../filepath": the template name cannot contain any path`),
+		},
+		{
+			name: "Should return error if the external template file name is not a valid filename",
+			cfg: `
+alertmanager_config: |
+  route:
+    receiver: 'default-receiver'
+    group_wait: 30s
+    group_interval: 5m
+    repeat_interval: 4h
+    group_by: [cluster, alertname]
+  receivers:
+    - name: default-receiver
+template_files:
+  "good.tpl": "good-templ"
+  ".": "bad-template"
+`,
+			err: fmt.Errorf("error validating Alertmanager config: unable to store template file '.'"),
+		},
+		{
+			name: "Should return error if the referenced template contains the root /",
+			cfg: `
+alertmanager_config: |
+  route:
+    receiver: 'default-receiver'
+    group_wait: 30s
+    group_interval: 5m
+    repeat_interval: 4h
+    group_by: [cluster, alertname]
+  receivers:
+    - name: default-receiver
+  templates:
+    - "/"
+`,
+			err: fmt.Errorf(`error validating Alertmanager config: invalid template name "/": the template name cannot contain any path`),
+		},
+		{
+			name: "Should return error if the referenced template contains the root with repeated separators ///",
+			cfg: `
+alertmanager_config: |
+  route:
+    receiver: 'default-receiver'
+    group_wait: 30s
+    group_interval: 5m
+    repeat_interval: 4h
+    group_by: [cluster, alertname]
+  receivers:
+    - name: default-receiver
+  templates:
+    - "///"
+`,
+			err: fmt.Errorf(`error validating Alertmanager config: invalid template name "///": the template name cannot contain any path`),
+		},
+		{
+			name: "Should return error if the referenced template contains an absolute path",
+			cfg: `
+alertmanager_config: |
+  route:
+    receiver: 'default-receiver'
+    group_wait: 30s
+    group_interval: 5m
+    repeat_interval: 4h
+    group_by: [cluster, alertname]
+  receivers:
+    - name: default-receiver
+  templates:
+    - "/absolute/filepath"
+`,
+			err: fmt.Errorf(`error validating Alertmanager config: invalid template name "/absolute/filepath": the template name cannot contain any path`),
+		},
+		{
+			name: "Should return error if the referenced template contains a relative path",
+			cfg: `
+alertmanager_config: |
+  route:
+    receiver: 'default-receiver'
+    group_wait: 30s
+    group_interval: 5m
+    repeat_interval: 4h
+    group_by: [cluster, alertname]
+  receivers:
+    - name: default-receiver
+  templates:
+    - "../filepath"
+`,
+			err: fmt.Errorf(`error validating Alertmanager config: invalid template name "../filepath": the template name cannot contain any path`),
+		},
+		{
+			name: "Should pass if the referenced template is valid filename",
+			cfg: `
+alertmanager_config: |
+  route:
+    receiver: 'default-receiver'
+    group_wait: 30s
+    group_interval: 5m
+    repeat_interval: 4h
+    group_by: [cluster, alertname]
+  receivers:
+    - name: default-receiver
+  templates:
+    - "something.tmpl"
+`,
 		},
 	}
 
@@ -150,7 +249,6 @@ template_files:
 				require.Equal(t, http.StatusBadRequest, resp.StatusCode)
 				require.Equal(t, tc.err.Error()+"\n", string(body))
 			}
-
 		})
 	}
 }

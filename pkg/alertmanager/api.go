@@ -148,6 +148,20 @@ func validateUserConfig(logger log.Logger, cfg alertspb.AlertConfigDesc) error {
 		return err
 	}
 
+	// Validate templates referenced in the alertmanager config.
+	for _, name := range amCfg.Templates {
+		if err := validateTemplateFilename(name); err != nil {
+			return err
+		}
+	}
+
+	// Validate template files.
+	for _, tmpl := range cfg.Templates {
+		if err := validateTemplateFilename(tmpl.Filename); err != nil {
+			return err
+		}
+	}
+
 	// Create templates on disk in a temporary directory.
 	// Note: This means the validation will succeed if we can write to tmp but
 	// not to configured data dir, and on the flipside, it'll fail if we can't write
@@ -160,10 +174,15 @@ func validateUserConfig(logger log.Logger, cfg alertspb.AlertConfigDesc) error {
 	defer os.RemoveAll(userTempDir)
 
 	for _, tmpl := range cfg.Templates {
-		_, err := storeTemplateFile(userTempDir, tmpl.Filename, tmpl.Body)
+		templateFilepath, err := safeTemplateFilepath(userTempDir, tmpl.Filename)
 		if err != nil {
-			level.Error(logger).Log("msg", "unable to create template file", "err", err, "user", cfg.User)
-			return fmt.Errorf("unable to create template file '%s'", tmpl.Filename)
+			level.Error(logger).Log("msg", "unable to create template file path", "err", err, "user", cfg.User)
+			return err
+		}
+
+		if _, err = storeTemplateFile(templateFilepath, tmpl.Body); err != nil {
+			level.Error(logger).Log("msg", "unable to store template file", "err", err, "user", cfg.User)
+			return fmt.Errorf("unable to store template file '%s'", tmpl.Filename)
 		}
 	}
 
