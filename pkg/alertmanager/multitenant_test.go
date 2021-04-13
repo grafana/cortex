@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"net/http/pprof"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -825,4 +826,55 @@ func prepareFilesystemAlertStore(t *testing.T) alertstore.AlertStore {
 	require.NoError(t, err)
 
 	return store
+}
+
+func TestSafeTemplateFilepath(t *testing.T) {
+	tests := map[string]struct {
+		dir          string
+		template     string
+		expectedPath string
+		expectedErr  error
+	}{
+		"should succeed if the provided template is a filename": {
+			dir:          "/data/tenant",
+			template:     "test.tmpl",
+			expectedPath: "/data/tenant/test.tmpl",
+		},
+		"should fail if the provided template is escaping the dir": {
+			dir:         "/data/tenant",
+			template:    "../test.tmpl",
+			expectedErr: errors.New(`invalid template name "../test.tmpl": the template filepath is escaping the per-tenant local directory`),
+		},
+	}
+
+	for testName, testData := range tests {
+		t.Run(testName, func(t *testing.T) {
+			actualPath, actualErr := safeTemplateFilepath(testData.dir, testData.template)
+			assert.Equal(t, testData.expectedErr, actualErr)
+			assert.Equal(t, testData.expectedPath, actualPath)
+		})
+	}
+}
+
+func TestStoreTemplateFile(t *testing.T) {
+	tempDir, err := ioutil.TempDir(os.TempDir(), "alertmanager")
+	require.NoError(t, err)
+
+	t.Cleanup(func() {
+		require.NoError(t, os.RemoveAll(tempDir))
+	})
+
+	testTemplateDir := filepath.Join(tempDir, templatesDir)
+
+	changed, err := storeTemplateFile(filepath.Join(testTemplateDir, "some-template"), "content")
+	require.NoError(t, err)
+	require.True(t, changed)
+
+	changed, err = storeTemplateFile(filepath.Join(testTemplateDir, "some-template"), "new content")
+	require.NoError(t, err)
+	require.True(t, changed)
+
+	changed, err = storeTemplateFile(filepath.Join(testTemplateDir, "some-template"), "new content") // reusing previous content
+	require.NoError(t, err)
+	require.False(t, changed)
 }
