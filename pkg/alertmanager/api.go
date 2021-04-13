@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
 
 	"github.com/pkg/errors"
 
@@ -156,48 +157,9 @@ func validateUserConfig(logger log.Logger, cfg alertspb.AlertConfigDesc) error {
 		return err
 	}
 
-	// Reject whenever a file is being set. NOTE: This is fragile, and if a new reciever is added, we'll need to update here.
-	// Can't think of better ideas though.
-	if err := validateReceiverHTTPConfig(amCfg.Global.HTTPConfig); err != nil {
-		return errors.Wrap(err, "global.http_config")
-	}
-
-	for _, receiver := range amCfg.Receivers {
-		for _, pd_cfg := range receiver.PagerdutyConfigs {
-			if err := validateReceiverHTTPConfig(pd_cfg.HTTPConfig); err != nil {
-				return errors.Wrap(err, "pagerduty_config")
-			}
-		}
-		for _, pushover_cfg := range receiver.PushoverConfigs {
-			if err := validateReceiverHTTPConfig(pushover_cfg.HTTPConfig); err != nil {
-				return errors.Wrap(err, "pushover_config")
-			}
-		}
-		for _, slack_cfg := range receiver.SlackConfigs {
-			if err := validateReceiverHTTPConfig(slack_cfg.HTTPConfig); err != nil {
-				return errors.Wrap(err, "slack_config")
-			}
-		}
-		for _, opsgenie_cfg := range receiver.OpsGenieConfigs {
-			if err := validateReceiverHTTPConfig(opsgenie_cfg.HTTPConfig); err != nil {
-				return errors.Wrap(err, "opsgenie_config")
-			}
-		}
-		for _, victorops_cfg := range receiver.VictorOpsConfigs {
-			if err := validateReceiverHTTPConfig(victorops_cfg.HTTPConfig); err != nil {
-				return errors.Wrap(err, "victorops_config")
-			}
-		}
-		for _, webhook_cfg := range receiver.WebhookConfigs {
-			if err := validateReceiverHTTPConfig(webhook_cfg.HTTPConfig); err != nil {
-				return errors.Wrap(err, "webhook_config")
-			}
-		}
-		for _, email_cfg := range receiver.EmailConfigs {
-			if err := validateReceiverTLSConfig(email_cfg.TLSConfig); err != nil {
-				return errors.Wrap(err, "email_config")
-			}
-		}
+	// Validate the config recursively scanning it.
+	if err := validateAlertmanagerConfig(amCfg); err != nil {
+		return err
 	}
 
 	// Validate templates referenced in the alertmanager config.
@@ -256,12 +218,82 @@ func validateUserConfig(logger log.Logger, cfg alertspb.AlertConfigDesc) error {
 	return nil
 }
 
-// validateReceiverHTTPConfig validates the HTTP config and returns an error if it contains
-// settings not allowed by Cortex.
-func validateReceiverHTTPConfig(cfg *commoncfg.HTTPClientConfig) error {
-	if cfg == nil {
+// validateAlertmanagerConfig recursively scans the input config looking for data types for which
+// we have a specific validation and, whenever encountered, it runs their validation. Returns the
+// first error or nil if validation succeeds.
+func validateAlertmanagerConfig(cfg interface{}) error {
+	v := reflect.ValueOf(cfg)
+	t := v.Type()
+
+	// Skip invalid, the zero value or a nil pointer (checked by zero value).
+	if !v.IsValid() || v.IsZero() {
 		return nil
 	}
+
+	// If the input config is a pointer then we need to get its value.
+	// At this point the pointer value can't be nil.
+	if v.Kind() == reflect.Ptr {
+		v = v.Elem()
+		t = v.Type()
+	}
+
+	// Check if the input config is a data type for which we have a specific validation.
+	// At this point the value can't be a pointer anymore.
+	switch t {
+	case reflect.TypeOf(commoncfg.HTTPClientConfig{}):
+		return validateReceiverHTTPConfig(v.Interface().(commoncfg.HTTPClientConfig))
+
+	case reflect.TypeOf(commoncfg.TLSConfig{}):
+		return validateReceiverTLSConfig(v.Interface().(commoncfg.TLSConfig))
+	}
+
+	// If the input config is a struct, recursively iterate on all fields.
+	if t.Kind() == reflect.Struct {
+		for i := 0; i < t.NumField(); i++ {
+			field := t.Field(i)
+			fieldValue := v.FieldByIndex(field.Index)
+
+			// Skip any field value which can't be converted to interface (eg. primitive types).
+			if fieldValue.CanInterface() {
+				if err := validateAlertmanagerConfig(fieldValue.Interface()); err != nil {
+					return err
+				}
+			}
+		}
+	}
+
+	if t.Kind() == reflect.Slice || t.Kind() == reflect.Array {
+		for i := 0; i < v.Len(); i++ {
+			fieldValue := v.Index(i)
+
+			// Skip any field value which can't be converted to interface (eg. primitive types).
+			if fieldValue.CanInterface() {
+				if err := validateAlertmanagerConfig(fieldValue.Interface()); err != nil {
+					return err
+				}
+			}
+		}
+	}
+
+	if t.Kind() == reflect.Map {
+		for _, key := range v.MapKeys() {
+			fieldValue := v.MapIndex(key)
+
+			// Skip any field value which can't be converted to interface (eg. primitive types).
+			if fieldValue.CanInterface() {
+				if err := validateAlertmanagerConfig(fieldValue.Interface()); err != nil {
+					return err
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
+// validateReceiverHTTPConfig validates the HTTP config and returns an error if it contains
+// settings not allowed by Cortex.
+func validateReceiverHTTPConfig(cfg commoncfg.HTTPClientConfig) error {
 	if cfg.BasicAuth != nil && cfg.BasicAuth.PasswordFile != "" {
 		return errPasswordFileNotAllowed
 	}

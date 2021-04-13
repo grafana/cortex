@@ -11,6 +11,9 @@ import (
 
 	"github.com/go-kit/kit/log"
 	"github.com/pkg/errors"
+	"github.com/prometheus/alertmanager/config"
+	commoncfg "github.com/prometheus/common/config"
+	"github.com/stretchr/testify/assert"
 	"github.com/thanos-io/thanos/pkg/objstore"
 
 	"github.com/cortexproject/cortex/pkg/alertmanager/alertspb"
@@ -240,7 +243,7 @@ alertmanager_config: |
   receivers:
     - name: default-receiver
 `,
-			err: errors.Wrap(errors.Wrap(errPasswordFileNotAllowed, "global.http_config"), "error validating Alertmanager config"),
+			err: errors.Wrap(errPasswordFileNotAllowed, "error validating Alertmanager config"),
 		},
 		{
 			name: "Should return error if global HTTP bearer_token_file is set",
@@ -255,7 +258,7 @@ alertmanager_config: |
   receivers:
     - name: default-receiver
 `,
-			err: errors.Wrap(errors.Wrap(errPasswordFileNotAllowed, "global.http_config"), "error validating Alertmanager config"),
+			err: errors.Wrap(errPasswordFileNotAllowed, "error validating Alertmanager config"),
 		},
 		{
 			name: "Should return error if global HTTP credentials_file is set",
@@ -271,7 +274,7 @@ alertmanager_config: |
   receivers:
     - name: default-receiver
 `,
-			err: errors.Wrap(errors.Wrap(errPasswordFileNotAllowed, "global.http_config"), "error validating Alertmanager config"),
+			err: errors.Wrap(errPasswordFileNotAllowed, "error validating Alertmanager config"),
 		},
 		{
 			name: "Should return error if receiver's HTTP password_file is set",
@@ -288,7 +291,7 @@ alertmanager_config: |
   route:
     receiver: 'default-receiver'
 `,
-			err: errors.Wrap(errors.Wrap(errPasswordFileNotAllowed, "webhook_config"), "error validating Alertmanager config"),
+			err: errors.Wrap(errPasswordFileNotAllowed, "error validating Alertmanager config"),
 		},
 		{
 			name: "Should return error if receiver's HTTP bearer_token_file is set",
@@ -304,7 +307,7 @@ alertmanager_config: |
   route:
     receiver: 'default-receiver'
 `,
-			err: errors.Wrap(errors.Wrap(errPasswordFileNotAllowed, "webhook_config"), "error validating Alertmanager config"),
+			err: errors.Wrap(errPasswordFileNotAllowed, "error validating Alertmanager config"),
 		},
 		{
 			name: "Should return error if receiver's HTTP credentials_file is set",
@@ -321,7 +324,7 @@ alertmanager_config: |
   route:
     receiver: 'default-receiver'
 `,
-			err: errors.Wrap(errors.Wrap(errPasswordFileNotAllowed, "webhook_config"), "error validating Alertmanager config"),
+			err: errors.Wrap(errPasswordFileNotAllowed, "error validating Alertmanager config"),
 		},
 	}
 
@@ -393,5 +396,105 @@ func TestMultitenantAlertmanager_DeleteUserConfig(t *testing.T) {
 
 		require.Equal(t, http.StatusOK, rec.Code)
 		require.Equal(t, 0, len(storage.Objects()))
+	}
+}
+
+func TestValidateAlertmanagerConfig(t *testing.T) {
+	tests := map[string]struct {
+		input    interface{}
+		expected error
+	}{
+		"*HTTPClientConfig": {
+			input: &commoncfg.HTTPClientConfig{
+				BasicAuth: &commoncfg.BasicAuth{
+					PasswordFile: "/secrets",
+				},
+			},
+			expected: errPasswordFileNotAllowed,
+		},
+		"HTTPClientConfig": {
+			input: commoncfg.HTTPClientConfig{
+				BasicAuth: &commoncfg.BasicAuth{
+					PasswordFile: "/secrets",
+				},
+			},
+			expected: errPasswordFileNotAllowed,
+		},
+		"*TLSConfig": {
+			input: &commoncfg.TLSConfig{
+				CertFile: "/cert",
+			},
+			expected: errTLSFileNotAllowed,
+		},
+		"TLSConfig": {
+			input: commoncfg.TLSConfig{
+				CertFile: "/cert",
+			},
+			expected: errTLSFileNotAllowed,
+		},
+		"struct containing *HTTPClientConfig as direct child": {
+			input: config.GlobalConfig{
+				HTTPConfig: &commoncfg.HTTPClientConfig{
+					BasicAuth: &commoncfg.BasicAuth{
+						PasswordFile: "/secrets",
+					},
+				},
+			},
+			expected: errPasswordFileNotAllowed,
+		},
+		"struct containing *HTTPClientConfig as nested child": {
+			input: config.Config{
+				Global: &config.GlobalConfig{
+					HTTPConfig: &commoncfg.HTTPClientConfig{
+						BasicAuth: &commoncfg.BasicAuth{
+							PasswordFile: "/secrets",
+						},
+					},
+				},
+			},
+			expected: errPasswordFileNotAllowed,
+		},
+		"struct containing *HTTPClientConfig as nested child within a slice": {
+			input: config.Config{
+				Receivers: []*config.Receiver{{
+					Name: "test",
+					WebhookConfigs: []*config.WebhookConfig{{
+						HTTPConfig: &commoncfg.HTTPClientConfig{
+							BasicAuth: &commoncfg.BasicAuth{
+								PasswordFile: "/secrets",
+							},
+						},
+					}}},
+				},
+			},
+			expected: errPasswordFileNotAllowed,
+		},
+		"map containing *HTTPClientConfig": {
+			input: map[string]*commoncfg.HTTPClientConfig{
+				"test": {
+					BasicAuth: &commoncfg.BasicAuth{
+						PasswordFile: "/secrets",
+					},
+				},
+			},
+			expected: errPasswordFileNotAllowed,
+		},
+		"map containing TLSConfig as nested child": {
+			input: map[string][]config.EmailConfig{
+				"test": {{
+					TLSConfig: commoncfg.TLSConfig{
+						CAFile: "/file",
+					},
+				}},
+			},
+			expected: errTLSFileNotAllowed,
+		},
+	}
+
+	for testName, testData := range tests {
+		t.Run(testName, func(t *testing.T) {
+			err := validateAlertmanagerConfig(testData.input)
+			assert.ErrorIs(t, err, testData.expected)
+		})
 	}
 }
