@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/go-kit/kit/log"
+	"github.com/pkg/errors"
 	"github.com/thanos-io/thanos/pkg/objstore"
 
 	"github.com/cortexproject/cortex/pkg/alertmanager/alertspb"
@@ -224,6 +225,103 @@ alertmanager_config: |
   templates:
     - "something.tmpl"
 `,
+		},
+		{
+			name: "Should return error if global HTTP password_file is set",
+			cfg: `
+alertmanager_config: |
+  global:
+    http_config:
+      basic_auth:
+        password_file: /secrets
+
+  route:
+    receiver: 'default-receiver'
+  receivers:
+    - name: default-receiver
+`,
+			err: errors.Wrap(errors.Wrap(errPasswordFileNotAllowed, "global.http_config"), "error validating Alertmanager config"),
+		},
+		{
+			name: "Should return error if global HTTP bearer_token_file is set",
+			cfg: `
+alertmanager_config: |
+  global:
+    http_config:
+      bearer_token_file: /secrets
+
+  route:
+    receiver: 'default-receiver'
+  receivers:
+    - name: default-receiver
+`,
+			err: errors.Wrap(errors.Wrap(errPasswordFileNotAllowed, "global.http_config"), "error validating Alertmanager config"),
+		},
+		{
+			name: "Should return error if global HTTP credentials_file is set",
+			cfg: `
+alertmanager_config: |
+  global:
+    http_config:
+      authorization:
+        credentials_file: /secrets
+
+  route:
+    receiver: 'default-receiver'
+  receivers:
+    - name: default-receiver
+`,
+			err: errors.Wrap(errors.Wrap(errPasswordFileNotAllowed, "global.http_config"), "error validating Alertmanager config"),
+		},
+		{
+			name: "Should return error if receiver's HTTP password_file is set",
+			cfg: `
+alertmanager_config: |
+  receivers:
+    - name: default-receiver
+      webhook_configs:
+        - url: http://localhost
+          http_config:
+            basic_auth:
+              password_file: /secrets
+
+  route:
+    receiver: 'default-receiver'
+`,
+			err: errors.Wrap(errors.Wrap(errPasswordFileNotAllowed, "webhook_config"), "error validating Alertmanager config"),
+		},
+		{
+			name: "Should return error if receiver's HTTP bearer_token_file is set",
+			cfg: `
+alertmanager_config: |
+  receivers:
+    - name: default-receiver
+      webhook_configs:
+        - url: http://localhost
+          http_config:
+            bearer_token_file: /secrets
+
+  route:
+    receiver: 'default-receiver'
+`,
+			err: errors.Wrap(errors.Wrap(errPasswordFileNotAllowed, "webhook_config"), "error validating Alertmanager config"),
+		},
+		{
+			name: "Should return error if receiver's HTTP credentials_file is set",
+			cfg: `
+alertmanager_config: |
+  receivers:
+    - name: default-receiver
+      webhook_configs:
+        - url: http://localhost
+          http_config:
+            authorization:
+              credentials_file: /secrets
+
+  route:
+    receiver: 'default-receiver'
+`,
+			err: errors.Wrap(errors.Wrap(errPasswordFileNotAllowed, "webhook_config"), "error validating Alertmanager config"),
 		},
 	}
 

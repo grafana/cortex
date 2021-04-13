@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/pkg/errors"
+
 	"github.com/cortexproject/cortex/pkg/alertmanager/alertspb"
 	"github.com/cortexproject/cortex/pkg/tenant"
 	util_log "github.com/cortexproject/cortex/pkg/util/log"
@@ -15,6 +17,7 @@ import (
 	"github.com/go-kit/kit/log/level"
 	"github.com/prometheus/alertmanager/config"
 	"github.com/prometheus/alertmanager/template"
+	commoncfg "github.com/prometheus/common/config"
 	"gopkg.in/yaml.v2"
 )
 
@@ -25,6 +28,11 @@ const (
 	errStoringConfiguration  = "unable to store the Alertmanager config"
 	errDeletingConfiguration = "unable to delete the Alertmanager config"
 	errNoOrgID               = "unable to determine the OrgID"
+)
+
+var (
+	errPasswordFileNotAllowed = errors.New("setting password_file, bearer_token_file and credentials_file is not allowed")
+	errTLSFileNotAllowed      = errors.New("setting TLS ca_file, cert_file and key_file is not allowed")
 )
 
 // UserConfig is used to communicate a users alertmanager configs
@@ -148,6 +156,50 @@ func validateUserConfig(logger log.Logger, cfg alertspb.AlertConfigDesc) error {
 		return err
 	}
 
+	// Reject whenever a file is being set. NOTE: This is fragile, and if a new reciever is added, we'll need to update here.
+	// Can't think of better ideas though.
+	if err := validateReceiverHTTPConfig(amCfg.Global.HTTPConfig); err != nil {
+		return errors.Wrap(err, "global.http_config")
+	}
+
+	for _, receiver := range amCfg.Receivers {
+		for _, pd_cfg := range receiver.PagerdutyConfigs {
+			if err := validateReceiverHTTPConfig(pd_cfg.HTTPConfig); err != nil {
+				return errors.Wrap(err, "pagerduty_config")
+			}
+		}
+		for _, pushover_cfg := range receiver.PushoverConfigs {
+			if err := validateReceiverHTTPConfig(pushover_cfg.HTTPConfig); err != nil {
+				return errors.Wrap(err, "pushover_config")
+			}
+		}
+		for _, slack_cfg := range receiver.SlackConfigs {
+			if err := validateReceiverHTTPConfig(slack_cfg.HTTPConfig); err != nil {
+				return errors.Wrap(err, "slack_config")
+			}
+		}
+		for _, opsgenie_cfg := range receiver.OpsGenieConfigs {
+			if err := validateReceiverHTTPConfig(opsgenie_cfg.HTTPConfig); err != nil {
+				return errors.Wrap(err, "opsgenie_config")
+			}
+		}
+		for _, victorops_cfg := range receiver.VictorOpsConfigs {
+			if err := validateReceiverHTTPConfig(victorops_cfg.HTTPConfig); err != nil {
+				return errors.Wrap(err, "victorops_config")
+			}
+		}
+		for _, webhook_cfg := range receiver.WebhookConfigs {
+			if err := validateReceiverHTTPConfig(webhook_cfg.HTTPConfig); err != nil {
+				return errors.Wrap(err, "webhook_config")
+			}
+		}
+		for _, email_cfg := range receiver.EmailConfigs {
+			if err := validateReceiverTLSConfig(email_cfg.TLSConfig); err != nil {
+				return errors.Wrap(err, "email_config")
+			}
+		}
+	}
+
 	// Validate templates referenced in the alertmanager config.
 	for _, name := range amCfg.Templates {
 		if err := validateTemplateFilename(name); err != nil {
@@ -201,5 +253,32 @@ func validateUserConfig(logger log.Logger, cfg alertspb.AlertConfigDesc) error {
 	// autoWebhookURL itself is broken. In that case, I would argue, we should accept the config
 	// not reject it.
 
+	return nil
+}
+
+// validateReceiverHTTPConfig validates the HTTP config and returns an error if it contains
+// settings not allowed by Cortex.
+func validateReceiverHTTPConfig(cfg *commoncfg.HTTPClientConfig) error {
+	if cfg == nil {
+		return nil
+	}
+	if cfg.BasicAuth != nil && cfg.BasicAuth.PasswordFile != "" {
+		return errPasswordFileNotAllowed
+	}
+	if cfg.Authorization != nil && cfg.Authorization.CredentialsFile != "" {
+		return errPasswordFileNotAllowed
+	}
+	if cfg.BearerTokenFile != "" {
+		return errPasswordFileNotAllowed
+	}
+	return validateReceiverTLSConfig(cfg.TLSConfig)
+}
+
+// validateReceiverTLSConfig validates the TLS config and returns an error if it contains
+// settings not allowed by Cortex.
+func validateReceiverTLSConfig(cfg commoncfg.TLSConfig) error {
+	if cfg.CAFile != "" || cfg.CertFile != "" || cfg.KeyFile != "" {
+		return errTLSFileNotAllowed
+	}
 	return nil
 }
