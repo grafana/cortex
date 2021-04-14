@@ -9,16 +9,13 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/go-kit/kit/log"
+	"github.com/cortexproject/cortex/pkg/alertmanager/alertspb"
+	util_log "github.com/cortexproject/cortex/pkg/util/log"
+
 	"github.com/pkg/errors"
 	"github.com/prometheus/alertmanager/config"
 	commoncfg "github.com/prometheus/common/config"
 	"github.com/stretchr/testify/assert"
-	"github.com/thanos-io/thanos/pkg/objstore"
-
-	"github.com/cortexproject/cortex/pkg/alertmanager/alertspb"
-	util_log "github.com/cortexproject/cortex/pkg/util/log"
-
 	"github.com/stretchr/testify/require"
 	"github.com/weaveworks/common/user"
 )
@@ -260,22 +257,6 @@ alertmanager_config: |
 			err: errors.Wrap(errPasswordFileNotAllowed, "error validating Alertmanager config"),
 		},
 		{
-			name: "Should return error if global HTTP credentials_file is set",
-			cfg: `
-alertmanager_config: |
-  global:
-    http_config:
-      authorization:
-        credentials_file: /secrets
-
-  route:
-    receiver: 'default-receiver'
-  receivers:
-    - name: default-receiver
-`,
-			err: errors.Wrap(errPasswordFileNotAllowed, "error validating Alertmanager config"),
-		},
-		{
 			name: "Should return error if receiver's HTTP password_file is set",
 			cfg: `
 alertmanager_config: |
@@ -302,23 +283,6 @@ alertmanager_config: |
         - url: http://localhost
           http_config:
             bearer_token_file: /secrets
-
-  route:
-    receiver: 'default-receiver'
-`,
-			err: errors.Wrap(errPasswordFileNotAllowed, "error validating Alertmanager config"),
-		},
-		{
-			name: "Should return error if receiver's HTTP credentials_file is set",
-			cfg: `
-alertmanager_config: |
-  receivers:
-    - name: default-receiver
-      webhook_configs:
-        - url: http://localhost
-          http_config:
-            authorization:
-              credentials_file: /secrets
 
   route:
     receiver: 'default-receiver'
