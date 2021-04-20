@@ -545,6 +545,8 @@ func (d *Distributor) Push(ctx context.Context, req *cortexpb.WriteRequest) (*co
 	// For each timeseries, compute a hash to distribute across ingesters;
 	// check each sample and discard if outside limits.
 	for _, ts := range req.Timeseries {
+		d.matchesDebugSeries(ts.Labels, ts.Samples)
+
 		// Use timestamp of latest sample in the series. If samples for series are not ordered, metric for user may be wrong.
 		if len(ts.Samples) > 0 {
 			latestSampleTimestampMs = math.Max64(latestSampleTimestampMs, ts.Samples[len(ts.Samples)-1].TimestampMs)
@@ -597,6 +599,7 @@ func (d *Distributor) Push(ctx context.Context, req *cortexpb.WriteRequest) (*co
 
 		// validateSeries would have returned an emptyPreallocSeries if there were no valid samples.
 		if validatedSeries == emptyPreallocSeries {
+			level.Info(d.log).Log("msg", "we dropped all series. gasp", "numSamples", numSamples)
 			continue
 		}
 
