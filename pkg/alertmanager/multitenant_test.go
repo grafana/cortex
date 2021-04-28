@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"net/http/pprof"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -19,6 +20,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/thanos-io/thanos/pkg/objstore"
 	"github.com/weaveworks/common/user"
 
 	"github.com/cortexproject/cortex/pkg/alertmanager/alertspb"
@@ -78,7 +80,7 @@ func TestMultitenantAlertmanager_loadAndSyncConfigs(t *testing.T) {
 	ctx := context.Background()
 
 	// Run this test using a real storage client.
-	store := prepareFilesystemAlertStore(t)
+	store := prepareInMemoryAlertStore()
 	require.NoError(t, store.SetAlertConfig(ctx, alertspb.AlertConfigDesc{
 		User:      "user1",
 		RawConfig: simpleConfigOne,
@@ -201,7 +203,7 @@ func TestMultitenantAlertmanager_NoExternalURL(t *testing.T) {
 
 func TestMultitenantAlertmanager_ServeHTTP(t *testing.T) {
 	// Run this test using a real storage client.
-	store := prepareFilesystemAlertStore(t)
+	store := prepareInMemoryAlertStore()
 
 	amConfig := mockAlertmanagerConfig(t)
 
@@ -306,7 +308,7 @@ func TestMultitenantAlertmanager_ServeHTTPWithFallbackConfig(t *testing.T) {
 	amConfig := mockAlertmanagerConfig(t)
 
 	// Run this test using a real storage client.
-	store := prepareFilesystemAlertStore(t)
+	store := prepareInMemoryAlertStore()
 
 	externalURL := flagext.URLValue{}
 	err := externalURL.Set("http://localhost:8080/alertmanager")
@@ -515,7 +517,7 @@ func TestMultitenantAlertmanager_PerTenantSharding(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := context.Background()
 			ringStore := consul.NewInMemoryClient(ring.GetCodec())
-			alertStore := prepareFilesystemAlertStore(t)
+			alertStore := prepareInMemoryAlertStore()
 
 			var instances []*MultitenantAlertmanager
 			var instanceIDs []string
@@ -702,7 +704,7 @@ func TestMultitenantAlertmanager_SyncOnRingTopologyChanges(t *testing.T) {
 			amConfig.PollInterval = time.Hour // Don't trigger the periodic check.
 
 			ringStore := consul.NewInMemoryClient(ring.GetCodec())
-			alertStore := prepareFilesystemAlertStore(t)
+			alertStore := prepareInMemoryAlertStore()
 
 			reg := prometheus.NewPedanticRegistry()
 			am, err := createMultitenantAlertmanager(amConfig, nil, nil, alertStore, ringStore, log.NewNopLogger(), reg)
@@ -756,7 +758,7 @@ func TestMultitenantAlertmanager_RingLifecyclerShouldAutoForgetUnhealthyInstance
 	amConfig.ShardingRing.HeartbeatTimeout = heartbeatTimeout
 
 	ringStore := consul.NewInMemoryClient(ring.GetCodec())
-	alertStore := prepareFilesystemAlertStore(t)
+	alertStore := prepareInMemoryAlertStore()
 
 	am, err := createMultitenantAlertmanager(amConfig, nil, nil, alertStore, ringStore, log.NewNopLogger(), nil)
 	require.NoError(t, err)
@@ -806,23 +808,58 @@ func TestMultitenantAlertmanager_InitialSyncFailureWithSharding(t *testing.T) {
 	require.NotNil(t, am.ring)
 }
 
-// prepareFilesystemAlertStore builds and returns a filesystem-based alert store.
-func prepareFilesystemAlertStore(t *testing.T) alertstore.AlertStore {
-	// Create a temporarily directory for the storage.
-	tmpDir, err := ioutil.TempDir(os.TempDir(), "alertmanager")
+// prepareInMemoryAlertStore builds and returns an in-memory alert store.
+func prepareInMemoryAlertStore() alertstore.AlertStore {
+	return bucketclient.NewBucketAlertStore(objstore.NewInMemBucket(), nil, log.NewNopLogger())
+}
+
+func TestSafeTemplateFilepath(t *testing.T) {
+	tests := map[string]struct {
+		dir          string
+		template     string
+		expectedPath string
+		expectedErr  error
+	}{
+		"should succeed if the provided template is a filename": {
+			dir:          "/data/tenant",
+			template:     "test.tmpl",
+			expectedPath: "/data/tenant/test.tmpl",
+		},
+		"should fail if the provided template is escaping the dir": {
+			dir:         "/data/tenant",
+			template:    "../test.tmpl",
+			expectedErr: errors.New(`invalid template name "../test.tmpl": the template filepath is escaping the per-tenant local directory`),
+		},
+	}
+
+	for testName, testData := range tests {
+		t.Run(testName, func(t *testing.T) {
+			actualPath, actualErr := safeTemplateFilepath(testData.dir, testData.template)
+			assert.Equal(t, testData.expectedErr, actualErr)
+			assert.Equal(t, testData.expectedPath, actualPath)
+		})
+	}
+}
+
+func TestStoreTemplateFile(t *testing.T) {
+	tempDir, err := ioutil.TempDir(os.TempDir(), "alertmanager")
 	require.NoError(t, err)
+
 	t.Cleanup(func() {
-		os.RemoveAll(tmpDir)
+		require.NoError(t, os.RemoveAll(tempDir))
 	})
 
-	// Configure the filesystem-based storage.
-	cfg := alertstore.Config{}
-	flagext.DefaultValues(&cfg)
-	cfg.Backend = "filesystem"
-	cfg.Filesystem.Directory = tmpDir
+	testTemplateDir := filepath.Join(tempDir, templatesDir)
 
-	store, err := alertstore.NewAlertStore(context.Background(), cfg, nil, log.NewNopLogger(), nil)
+	changed, err := storeTemplateFile(filepath.Join(testTemplateDir, "some-template"), "content")
 	require.NoError(t, err)
+	require.True(t, changed)
 
-	return store
+	changed, err = storeTemplateFile(filepath.Join(testTemplateDir, "some-template"), "new content")
+	require.NoError(t, err)
+	require.True(t, changed)
+
+	changed, err = storeTemplateFile(filepath.Join(testTemplateDir, "some-template"), "new content") // reusing previous content
+	require.NoError(t, err)
+	require.False(t, changed)
 }
